@@ -70,11 +70,15 @@ Controls ShiftController::update(const DriverInput& in, const Rig& rig, float dt
         else if (n > 1 && road_rpm(target_) < down && rpm < 1.15f * down) target_ -= dir;
     }
 
-    // Pulling away and stopping: the clutch bites as either side of it rises above idle.
+    // Pulling away and stopping: the clutch bites as either side of it rises above idle. A touch of throttle
+    // also starts it biting, gently (at most 15% of its capacity, which an idling engine can hold): otherwise
+    // small throttle never raised the revs enough and the truck sat still until a fifth of the pedal.
     float pedal = 0.0f;
     if (target_ != 0 && !(rig.clutch_locked() && rpm > 1.08f * engine.idle_rpm)) {
         const float fastest = std::max(rpm, std::abs(rig.input_rpm(target_)));
-        const float bite = std::clamp((fastest - 1.1f * engine.idle_rpm) / (0.5f * engine.idle_rpm), 0.0f, 1.0f);
+        const float revs = std::clamp((fastest - 1.1f * engine.idle_rpm) / (0.5f * engine.idle_rpm), 0.0f, 1.0f);
+        const float asked = in.throttle > 0.01f ? 0.15f * std::clamp(in.throttle / 0.1f, 0.0f, 1.0f) : 0.0f;
+        const float bite = std::max(revs, asked);
         pedal = bite >= 1.0f ? 0.0f : 0.8f - 0.6f * bite;
     }
 

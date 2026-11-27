@@ -129,13 +129,13 @@ half the speed in low range), a friction clutch that either holds or slips, engi
 Same world from here on. The well-equipped truck keeps using the track:
   pass  1 (deepest rut after: 24 cm)             crossed     41.2 s   22.7 km/h avg   0.63 L
   pass  2 (deepest rut after: 26 cm)             crossed     38.3 s   24.4 km/h avg   0.58 L
-  pass  3 (deepest rut after: 29 cm)             crossed     39.2 s   23.8 km/h avg   0.60 L
+  pass  3 (deepest rut after: 29 cm)             crossed     39.3 s   23.8 km/h avg   0.60 L
   pass  4 (deepest rut after: 32 cm)             crossed     40.5 s   23.1 km/h avg   0.62 L
-  pass  5 (deepest rut after: 36 cm)             crossed     42.3 s   22.2 km/h avg   0.64 L
-  pass  6 (deepest rut after: 50 cm)             STUCK  67 m into the mud (of 100)
+  pass  5 (deepest rut after: 36 cm)             crossed     42.3 s   22.1 km/h avg   0.64 L
+  pass  6 (deepest rut after: 50 cm)             STUCK  66 m into the mud (of 100)
 
 Build a gravel road: 14 loads of 10 m3, then grade.
-  gravel: 19 cm on the crown, 62 cm where the ruts were
+  gravel: 19 cm on the crown, 63 cm where the ruts were
   stock truck on gravel, first pass              crossed     22.3 s   42.0 km/h avg   0.27 L
   stock truck on gravel, second pass             crossed     22.3 s   42.0 km/h avg   0.27 L
 

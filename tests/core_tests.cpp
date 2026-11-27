@@ -801,6 +801,25 @@ void clutch_pedal_works_in_automatic() {
     CHECK(rig.speed() > 3.0f);  // rolling on, the engine no longer holding it back
 }
 
+// No dead zone at the bottom of the pedal: in the automatic box a touch of throttle makes the truck creep, and
+// more throttle pulls harder. With no throttle at all it stays put.
+void a_touch_of_throttle_moves_the_truck() {
+    auto speed_after = [](float throttle) {
+        Terrain t(4000, 48, 0.25f);
+        Rig rig(stock_truck(), t, SoilParams{}, 100.0f, 6.0f);
+        ShiftController box;
+        DriverInput in;
+        in.gear = 1;
+        in.throttle = throttle;
+        run(rig, box, in, 6.0f);
+        CHECK(rig.engine_running());
+        return rig.speed();
+    };
+    CHECK(speed_after(0.0f) < 0.05f);
+    CHECK(speed_after(0.05f) > 0.5f);
+    CHECK(speed_after(0.3f) > speed_after(0.15f) + 1.0f);
+}
+
 void exhaust_brake_holds_a_descent() {
     auto speed_after_descent = [](bool exhaust_brake) {
         Terrain t(2400, 48, 0.25f);
@@ -933,6 +952,7 @@ int main() {
     automatic_box_reaches_top_gear_and_reverses();
     dozer_reverses_as_fast_as_it_goes_forward();
     clutch_pedal_works_in_automatic();
+    a_touch_of_throttle_moves_the_truck();
     payload_loads_the_rear_bogie();
     handbrake_holds_on_a_slope();
     sequential_reverse();
