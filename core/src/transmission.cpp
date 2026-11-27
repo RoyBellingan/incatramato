@@ -119,6 +119,8 @@ Controls ShiftController::update(const DriverInput& in, const Rig& rig, float dt
             break;
         }
     }
+    // A driver with a clutch pedal can still use it: it disengages at least as far as they press it.
+    u.clutch = std::max(u.clutch, in.clutch);
     return u;
 }
 

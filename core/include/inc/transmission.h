@@ -16,7 +16,7 @@ struct DriverInput {
     float throttle = 0.0f;
     float brake = 0.0f;
     bool handbrake = false;
-    float clutch = 0.0f;  // Manual only
+    float clutch = 0.0f;  // the pedal; in Sequential and Automatic it adds to the automated clutch
     int gear = 0;         // Manual: lever position. Automatic: >0 drive, 0 neutral, <0 reverse. Sequential: unused
     int shift = 0;        // Sequential: +1 or -1 on the update the driver asks for a shift
     bool low_range = false;

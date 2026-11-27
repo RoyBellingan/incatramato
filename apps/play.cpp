@@ -289,17 +289,19 @@ struct Painter {
         }
         poly(p, 24, c);
     }
+    // Every lit pixel of the font is a small rectangle; they go to SDL in one call per string. One call per pixel
+    // was thousands a frame, and each takes a lock inside SDL: it ate a whole CPU core.
     float text(float x, float y, int s, Rgb c, const char* str) const {
-        colour(c);
+        static std::vector<SDL_FRect> pixels;
+        pixels.clear();
         for (; *str; ++str, x += 6.0f * s) {
             const unsigned char* g = font5x7::glyph(*str);
             for (int row = 0; row < 7; ++row)
                 for (int col = 0; col < 5; ++col)
-                    if (g[row] & (0x10 >> col)) {
-                        const SDL_FRect q{x + col * s, y + row * s, static_cast<float>(s), static_cast<float>(s)};
-                        SDL_RenderFillRectF(r, &q);
-                    }
+                    if (g[row] & (0x10 >> col)) pixels.push_back({x + col * s, y + row * s, static_cast<float>(s), static_cast<float>(s)});
         }
+        colour(c);
+        if (!pixels.empty()) SDL_RenderFillRectsF(r, pixels.data(), static_cast<int>(pixels.size()));
         return x;
     }
     void centred(float cx, float y, int s, Rgb c, const char* str) const {
@@ -346,11 +348,15 @@ void draw_ground(const Painter& p, const Game& g, View view) {
         if (c.loose > 0.005f) p.rect(x0, y_top, w, y_base - 4.0f - y_top + 1.0f, kGravel);  // loose gravel on the road
     }
     // The ground along the middle of the lane, between the wheels, as a line: the side view shows the left wheel
-    // track, so a heap or crown under the chassis would otherwise be invisible.
+    // track, so a heap or crown under the chassis would otherwise be invisible. One call for all of it.
+    static std::vector<SDL_FRect> dashes;
+    dashes.clear();
     for (float wx = std::floor((view.cam_x - 11.5f) / cs) * cs; wx < view.cam_x + 21.5f; wx += cs) {
         const Cell& c = t.at(wx + 0.5f * cs, lane_y);
-        p.rect(view.sx(wx), view.sy(c.surface()) - 1.0f, cs * kScale * 0.6f, 2.0f, {235, 235, 225});
+        dashes.push_back({view.sx(wx), view.sy(c.surface()) - 1.0f, cs * kScale * 0.6f, 2.0f});
     }
+    p.colour({235, 235, 225});
+    SDL_RenderFillRectsF(p.r, dashes.data(), static_cast<int>(dashes.size()));
 }
 
 void draw_wheel(const Painter& p, float cx, float cy, float radius, float angle) {
@@ -1160,7 +1166,8 @@ int telemetry_test(const Game& g) {
 #endif
 
 int controller_test(SDL_Renderer* renderer, SDL_Surface* surface, Game& g, Minimap& map, const std::string& prefix) {
-    if (SDL_InitSubSystem(SDL_INIT_JOYSTICK) != 0 || SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_WHEEL, 3, 12, 0) < 0) {
+    const int virtual_index = SDL_InitSubSystem(SDL_INIT_JOYSTICK) == 0 ? SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_WHEEL, 3, 12, 0) : -1;
+    if (virtual_index < 0) {
         std::printf("controller test skipped: no virtual joystick support\n");
         return 0;
     }
@@ -1172,7 +1179,7 @@ int controller_test(SDL_Renderer* renderer, SDL_Surface* surface, Game& g, Minim
         }
     };
     Pad pad;
-    pad.devices.refresh();
+    pad.devices.open_only(SDL_JoystickGetDeviceInstanceID(virtual_index));  // not a real wheel someone is touching
     SDL_Joystick* j = pad.devices.sticks().back();
     auto axis = [&](int a, int v) {
         SDL_JoystickSetVirtualAxis(j, a, static_cast<Sint16>(v));

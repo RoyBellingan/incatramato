@@ -783,6 +783,24 @@ void vehicles_sit_on_the_ground() {
     CHECK(near(on.pitch, 0.0, 1e-4) && near(on.z, 0.4, 1e-3));
 }
 
+// In the automatic box the driver's clutch pedal still works: pressed, the engine is let go of the wheels.
+void clutch_pedal_works_in_automatic() {
+    Terrain t(4000, 48, 0.25f);
+    Rig rig(stock_truck(), t, SoilParams{}, 100.0f, 6.0f);
+    ShiftController box;
+    DriverInput in;
+    in.gear = 1;
+    in.throttle = 1.0f;
+    run(rig, box, in, 8.0f);
+    CHECK(rig.clutch_locked());
+    in.clutch = 1.0f;
+    in.throttle = 0.0f;
+    Controls out;
+    for (int i = 0; i < 2000; ++i) rig.step(out = box.update(in, rig, kDt), kDt);
+    CHECK(out.clutch == 1.0f && !rig.clutch_locked());
+    CHECK(rig.speed() > 3.0f);  // rolling on, the engine no longer holding it back
+}
+
 void exhaust_brake_holds_a_descent() {
     auto speed_after_descent = [](bool exhaust_brake) {
         Terrain t(2400, 48, 0.25f);
@@ -914,6 +932,7 @@ int main() {
     sequential_box_shifts_itself();
     automatic_box_reaches_top_gear_and_reverses();
     dozer_reverses_as_fast_as_it_goes_forward();
+    clutch_pedal_works_in_automatic();
     payload_loads_the_rear_bogie();
     handbrake_holds_on_a_slope();
     sequential_reverse();

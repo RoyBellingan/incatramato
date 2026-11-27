@@ -51,6 +51,12 @@ public:
         for (int i = 0; i < SDL_NumJoysticks(); ++i)
             if (SDL_Joystick* j = SDL_JoystickOpen(i)) sticks_.push_back(j);
     }
+    void open_only(SDL_JoystickID id) {  // tests: just this device, whatever else is plugged in
+        close();
+        for (int i = 0; i < SDL_NumJoysticks(); ++i)
+            if (SDL_JoystickGetDeviceInstanceID(i) == id)
+                if (SDL_Joystick* j = SDL_JoystickOpen(i)) sticks_.push_back(j);
+    }
     const std::vector<SDL_Joystick*>& sticks() const { return sticks_; }
     static std::string name(SDL_Joystick* j) {
         const char* n = SDL_JoystickName(j);
