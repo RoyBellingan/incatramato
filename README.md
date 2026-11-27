@@ -80,13 +80,17 @@ a small binary format described above `terrain_blob()` in `apps/play.cpp`.
 
 ### Wheels, pedals, throttles, shifters
 
-Press F3 with the hardware plugged in. The game asks for each function in turn; push the pedal or lever all the
-way and let go, press the button, or put the shifter in the gate. Esc skips a function. Any mix of devices
-works, because bindings are stored per device name: a flight throttle and stick, a wheel with three pedals,
-a separate H-shifter. Inverted pedals and half axes (stick back = brake) are detected from how you moved them.
+Press F3 for the controller setup: a list of every function and what it is bound to. Pick one with Up/Down or a
+click, press Enter, then press the button you want, or push the pedal, lever or stick all the way and let go.
+Delete clears a binding; Esc saves and closes (Esc while it is waiting cancels just that one). Any mix of devices
+works, because bindings are stored per device name: a flight throttle and stick, a wheel with three pedals, a
+separate H-shifter. Which end of an axis is "released" is taken from where you let it go, so inverted pedals and
+half axes (stick back = brake) need nothing special, and an axis can also stand in for a button (pressed past
+halfway).
 
 - An H-shifter moves the lever when it changes gate, and back to neutral when it is in none.
-- Analogue pedals add to the keyboard, so both keep working.
+- Analogue pedals add to the keyboard, so both keep working, and they keep working while another window (the
+  telemetry or 3D view) has focus.
 - Bindings are saved to `input.cfg` in the working directory; it is a small text file you can edit.
 
 There is no steering yet (one lane) and no force feedback.

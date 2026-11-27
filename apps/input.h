@@ -23,6 +23,12 @@ inline constexpr const char* kFnNames[kFnCount] = {
     "reverse", "mode", "awd", "diff_lock", "low_range", "engine_brake", "starter", "next_vehicle", "cargo", "pave",
     "roll", "recover"};
 
+// What the setup screen calls them.
+inline constexpr const char* kFnLabels[kFnCount] = {
+    "THROTTLE", "BRAKE", "CLUTCH", "SHIFT UP", "SHIFT DOWN", "GEAR 1", "GEAR 2", "GEAR 3", "GEAR 4", "GEAR 5", "GEAR 6",
+    "REVERSE", "GEARBOX MODE", "AWD", "DIFF LOCK", "LOW RANGE", "ENGINE BRAKE", "STARTER", "NEXT VEHICLE",
+    "LOAD / TIP / BLADE", "PAVE", "ROLL", "RECOVER"};
+
 inline bool is_pedal(int fn) { return fn == Throttle || fn == Brake || fn == Clutch; }
 
 struct Binding {
@@ -77,8 +83,10 @@ struct Map {
         const float t = static_cast<float>(SDL_JoystickGetAxis(j, x.index) - x.rest) / static_cast<float>(x.full - x.rest);
         return std::clamp((t - 0.04f) / 0.92f, 0.0f, 1.0f);  // small dead band at both ends
     }
+    // Pressed: a bound button held, or a bound axis past halfway (an axis can stand in for any button).
     bool button(int fn, const Devices& d) const {
         const Binding& x = b[fn];
+        if (x.kind == Binding::Axis) return axis(fn, d) > 0.5f;
         if (x.kind != Binding::Button) return false;
         SDL_Joystick* j = d.find(x.device);
         return j && x.index < SDL_JoystickNumButtons(j) && SDL_JoystickGetButton(j, x.index);
@@ -89,7 +97,7 @@ struct Map {
     int gate(const Devices& d) const {
         bool any = false;
         for (int fn = Gear1; fn <= Reverse; ++fn) {
-            if (b[fn].kind != Binding::Button) continue;
+            if (b[fn].kind == Binding::None) continue;
             any = true;
             if (button(fn, d)) return fn == Reverse ? -1 : fn - Gear1 + 1;
         }
@@ -140,89 +148,115 @@ struct Map {
     }
 };
 
-// Walks through every function and binds whatever the player moves or presses next.
-class Wizard {
+// The setup screen: choose a function, then press the button or move the axis you want for it.
+//
+// Axes are recognised from the movement itself, not from a picture of the axes taken beforehand: SDL often
+// reports 0 for an axis until it first moves, so a pedal resting at one end can look as if it rests in the
+// middle. While listening, every axis's lowest and highest values are tracked, with the time each was first
+// reached; once one has swept most of its range, the end it reached first is "released" (where it rests) and the
+// other "fully applied", and it is bound when it is back at the released end and stays there: let go.
+// That also covers pedals wired the other way up and half axes such as a stick pulled back for the brake.
+class Setup {
 public:
     bool active() const { return active_; }
-    int current() const { return fn_; }
+    bool listening() const { return listening_; }
+    int selected() const { return sel_; }
+    float travel() const { return travel_; }  // the axis moving most while listening, 0..1 of a full sweep
 
-    void start(const Devices& d) {
+    void open() {
         active_ = true;
-        fn_ = 0;
-        released_ = {};
-        arm(d);
+        listening_ = false;
     }
-    void cancel() { active_ = false; }
-    void skip(Map& m, const Devices& d) {
-        if (!active_) return;
-        m.b[fn_] = {};
-        released_ = {};
-        advance(d);
+    void close() { active_ = listening_ = false; }
+    void move(int delta) {
+        if (!listening_) sel_ = (sel_ + delta + kFnCount) % kFnCount;
+    }
+    void select(int fn) {
+        if (!listening_ && fn >= 0 && fn < kFnCount) sel_ = fn;
+    }
+    void clear(Map& m) {
+        if (!listening_) m.b[sel_] = {};
+    }
+    void stop_listening() { listening_ = false; }
+
+    void listen(const Devices& d) {
+        listening_ = true;
+        travel_ = 0.0f;
+        clock_ = 0.0f;
+        sticks_.clear();
+        for (SDL_Joystick* j : d.sticks()) {
+            Stick st;
+            st.joystick = j;
+            for (int i = 0; i < SDL_JoystickNumButtons(j); ++i) st.held.push_back(SDL_JoystickGetButton(j, i));  // ignored until let go
+            for (int i = 0; i < SDL_JoystickNumAxes(j); ++i) {
+                const int v = SDL_JoystickGetAxis(j, i);
+                st.axes.push_back({v, v, 0.0f, 0.0f, 0.0f});
+            }
+            sticks_.push_back(std::move(st));
+        }
     }
 
-    // Call once per frame. Returns true on the frame the last function is done.
-    bool poll(Map& m, const Devices& d, float dt) {
-        if (!active_) return false;
-        if (settle_ > 0.0f) {
-            // Wait for the control just bound to be let go, then take a fresh picture of every axis at rest.
-            Map probe;
-            probe.b[0] = released_;
-            const bool held = released_.kind == Binding::Axis ? probe.axis(0, d) > 0.2f : probe.button(0, d);
-            if (held) return false;
-            settle_ -= dt;
-            if (settle_ <= 0.0f) snapshot(d);
-            return false;
-        }
-        for (std::size_t s = 0; s < d.sticks().size(); ++s) {
-            SDL_Joystick* j = d.sticks()[s];
-            for (int i = 0; i < SDL_JoystickNumButtons(j); ++i)
-                if (SDL_JoystickGetButton(j, i)) return bind(m, d, {Binding::Button, Devices::name(j), i, 0, 0});
-            if (!is_pedal(fn_)) continue;
-            for (int i = 0; i < SDL_JoystickNumAxes(j) && i < static_cast<int>(rest_[s].size()); ++i) {
-                const int raw = SDL_JoystickGetAxis(j, i), rest = rest_[s][i];
-                if (std::abs(raw - rest) < 24000) continue;
-                // Released positions sit at an end or in the middle; snap to it so noise does not shrink the range.
-                int snapped = rest;
-                for (int anchor : {-32768, 0, 32767})
-                    if (std::abs(rest - anchor) < 3000) snapped = anchor;
-                return bind(m, d, {Binding::Axis, Devices::name(j), i, snapped, raw > rest ? 32767 : -32768});
+    // Once per frame while listening. Returns true on the frame the selected function gets its binding.
+    bool poll(Map& m, float dt) {
+        if (!listening_) return false;
+        constexpr int kSweep = 20000;  // of 65535: what counts as moving an axis on purpose
+        constexpr int kEnd = 3000;     // this close to an end is at that end
+        travel_ = 0.0f;
+        clock_ += dt;
+        for (Stick& st : sticks_) {
+            for (int i = 0; i < static_cast<int>(st.held.size()); ++i) {
+                const bool down = SDL_JoystickGetButton(st.joystick, i);
+                if (down && !st.held[static_cast<std::size_t>(i)]) return bind(m, {Binding::Button, Devices::name(st.joystick), i, 0, 0});
+                st.held[static_cast<std::size_t>(i)] = down;
+            }
+            for (int i = 0; i < static_cast<int>(st.axes.size()); ++i) {
+                Track& a = st.axes[static_cast<std::size_t>(i)];
+                const int v = SDL_JoystickGetAxis(st.joystick, i);
+                // A new end counts only once well past the old one, so jitter at rest does not move its time.
+                if (v < a.lo - kEnd) a.t_lo = clock_;
+                if (v > a.hi + kEnd) a.t_hi = clock_;
+                a.lo = std::min(a.lo, v), a.hi = std::max(a.hi, v);
+                travel_ = std::max(travel_, static_cast<float>(a.hi - a.lo) / 65535.0f);
+                if (a.hi - a.lo < kSweep) continue;
+                const int rest = a.t_lo <= a.t_hi ? a.lo : a.hi;
+                if (std::abs(v - rest) > kEnd) {
+                    a.still = 0.0f;
+                    continue;
+                }
+                a.still += dt;
+                if (a.still < 0.25f) continue;  // let go, and staying there
+                auto snap = [](int x) {
+                    for (int anchor : {-32768, 0, 32767})
+                        if (std::abs(x - anchor) < kEnd) return anchor;
+                    return x;
+                };
+                return bind(m, {Binding::Axis, Devices::name(st.joystick), i, snap(rest), snap(rest == a.lo ? a.hi : a.lo)});
             }
         }
         return false;
     }
 
 private:
-    bool bind(Map& m, const Devices& d, Binding x) {
-        m.b[fn_] = x;
-        released_ = std::move(x);
-        return advance(d);
-    }
-    bool advance(const Devices& d) {
-        if (++fn_ >= kFnCount) {
-            active_ = false;
-            return true;
-        }
-        arm(d);
-        return false;
-    }
-    void arm(const Devices& d) {
-        settle_ = 0.3f;
-        snapshot(d);
-    }
-    void snapshot(const Devices& d) {
-        rest_.clear();
-        for (SDL_Joystick* j : d.sticks()) {
-            std::vector<int> axes(SDL_JoystickNumAxes(j));
-            for (std::size_t i = 0; i < axes.size(); ++i) axes[i] = SDL_JoystickGetAxis(j, static_cast<int>(i));
-            rest_.push_back(std::move(axes));
-        }
+    struct Track {
+        int lo, hi;          // lowest and highest readings so far
+        float t_lo, t_hi;    // when each was first reached (the reading at the start counts as both, at 0)
+        float still;         // how long it has stayed at the released end
+    };
+    struct Stick {
+        SDL_Joystick* joystick = nullptr;
+        std::vector<char> held;
+        std::vector<Track> axes;
+    };
+    bool bind(Map& m, Binding x) {
+        m.b[sel_] = std::move(x);
+        listening_ = false;
+        return true;
     }
 
-    bool active_ = false;
-    int fn_ = 0;
-    float settle_ = 0.0f;
-    Binding released_;
-    std::vector<std::vector<int>> rest_;
+    bool active_ = false, listening_ = false;
+    int sel_ = 0;
+    float travel_ = 0.0f, clock_ = 0.0f;
+    std::vector<Stick> sticks_;
 };
 
 }  // namespace input

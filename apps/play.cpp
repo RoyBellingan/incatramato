@@ -204,11 +204,11 @@ void update(Game& g, const Held& h, float frame_dt) {
     g.message_time = std::max(0.0f, g.message_time - frame_dt);
 }
 
-// Controller state: devices, bindings, the setup wizard, and what was pressed last frame.
+// Controller state: devices, bindings, the setup screen, and what was pressed last frame.
 struct Pad {
     input::Devices devices;
     input::Map map;
-    input::Wizard wizard;
+    input::Setup setup;
     std::array<bool, input::kFnCount> was{};
     int gate = input::Map::kNoShifter;
 };
@@ -613,21 +613,46 @@ void draw_map(const Painter& p, const Game& g, const Minimap& map, View view) {
            "T AWD   Y DIFF LOCK   L LOW RANGE   TAB VEHICLE   G LOAD / HOLD TO TIP (DOZER: BLADE, Z/X LAYER)   P PAVE   O ROLL   BACKSPACE RECOVER   F5 RESET   F1 SOUND   F11 FULLSCREEN");
 }
 
-void draw_wizard(const Painter& p, const Pad& pad) {
-    char buf[96];
-    const float cx = kW / 2.0f, y = 210.0f;
-    p.rect(cx - 400, y, 800, 190, kPanel);
-    p.frame(cx - 400, y, 800, 190, kText);
-    std::snprintf(buf, sizeof buf, "CONTROLLER SETUP  %d / %d", pad.wizard.current() + 1, static_cast<int>(input::kFnCount));
-    p.centred(cx, y + 16, 2, kDim, buf);
-    p.centred(cx, y + 50, 5, kAmber, input::kFnNames[pad.wizard.current()]);
-    p.centred(cx, y + 104, 2, kText,
-              input::is_pedal(pad.wizard.current()) ? "PUSH IT ALL THE WAY, THEN LET GO. A BUTTON WORKS TOO."
-                                                    : "PRESS THE BUTTON, OR PUT THE LEVER IN THAT GATE.");
-    p.centred(cx, y + 132, 2, kDim, "ESC: SKIP THIS ONE     F3: CANCEL");
-    std::string names = "DEVICES:";
+// The controller setup screen: every function with what it is bound to.
+constexpr float kSetupX = 190.0f, kSetupY = 40.0f, kSetupW = 900.0f, kSetupRowsY = kSetupY + 56.0f, kSetupRowH = 23.0f;
+
+int setup_row_at(float x, float y) {  // which function a click lands on, or -1
+    if (x < kSetupX || x > kSetupX + kSetupW || y < kSetupRowsY) return -1;
+    const int row = static_cast<int>((y - kSetupRowsY) / kSetupRowH);
+    return row < input::kFnCount ? row : -1;
+}
+
+void draw_setup(const Painter& p, const Pad& pad) {
+    const float h = 56.0f + static_cast<float>(input::kFnCount) * kSetupRowH + 52.0f;
+    p.rect(kSetupX, kSetupY, kSetupW, h, kPanel);
+    p.frame(kSetupX, kSetupY, kSetupW, h, kText);
+    p.text(kSetupX + 16, kSetupY + 12, 2, kText, "CONTROLLER SETUP");
+    std::string names = pad.devices.sticks().empty() ? "NO CONTROLLER CONNECTED" : "DEVICES:";
     for (SDL_Joystick* j : pad.devices.sticks()) names += " [" + input::Devices::name(j) + "]";
-    p.centred(cx, y + 164, 1, kDim, names.c_str());
+    if (names.size() > 140) names = names.substr(0, 137) + "...";
+    p.text(kSetupX + 16, kSetupY + 36, 1, kDim, names.c_str());
+    char buf[160];
+    for (int fn = 0; fn < input::kFnCount; ++fn) {
+        const float y = kSetupRowsY + fn * kSetupRowH;
+        const bool sel = fn == pad.setup.selected(), wait = sel && pad.setup.listening();
+        if (sel) p.rect(kSetupX + 6, y - 2, kSetupW - 12, kSetupRowH - 2, wait ? shade(kAmber, 0.35f) : kOff);
+        p.text(kSetupX + 16, y + 3, 2, sel ? kText : kDim, input::kFnLabels[fn]);
+        if (wait) {
+            p.text(kSetupX + 280, y + 3, 2, kAmber, "PRESS A BUTTON, OR MOVE AN AXIS FULLY AND LET GO");
+            p.rect(kSetupX + 280, y + 18, 560.0f * std::min(pad.setup.travel() / 0.31f, 1.0f), 2, kAmber);  // how far the axis has swept
+            continue;
+        }
+        const input::Binding& x = pad.map.b[static_cast<std::size_t>(fn)];
+        std::string dev = x.device.size() > 34 ? x.device.substr(0, 33) + "~" : x.device;
+        if (x.kind != input::Binding::None && !pad.devices.find(x.device)) dev += " (NOT CONNECTED)";
+        if (x.kind == input::Binding::Axis)
+            std::snprintf(buf, sizeof buf, "AXIS %d%s   %s", x.index, x.full < x.rest ? " REVERSED" : "", dev.c_str());
+        else if (x.kind == input::Binding::Button) std::snprintf(buf, sizeof buf, "BUTTON %d   %s", x.index, dev.c_str());
+        else std::snprintf(buf, sizeof buf, "-");
+        p.text(kSetupX + 280, y + 3, 2, x.kind == input::Binding::None ? kOff : kText, buf);
+    }
+    p.text(kSetupX + 16, kSetupRowsY + static_cast<float>(input::kFnCount) * kSetupRowH + 14, 2, kDim,
+           pad.setup.listening() ? "ESC: CANCEL" : "UP/DOWN OR CLICK: CHOOSE   ENTER: SET   DELETE: CLEAR   ESC: SAVE AND CLOSE");
 }
 
 void draw(SDL_Renderer* r, Game& g, Minimap& map, const Pad* pad = nullptr) {
@@ -640,7 +665,7 @@ void draw(SDL_Renderer* r, Game& g, Minimap& map, const Pad* pad = nullptr) {
     draw_vehicle(p, g, g.active(), view, true);
     draw_hud(p, g);
     draw_map(p, g, map, view);
-    if (pad && pad->wizard.active()) draw_wizard(p, *pad);
+    if (pad && pad->setup.active()) draw_setup(p, *pad);
 }
 
 // ---------------------------------------------------------------- entry points
@@ -884,6 +909,9 @@ void audio_callback(void* user, Uint8* stream, int len) {
 }
 
 int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
+    // Keep reading pedals and wheels while another window has focus: the telemetry and 3D views on a second
+    // screen. SDL ignores controllers in the background by default.
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
@@ -950,15 +978,36 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
             if (ev.type == SDL_QUIT) running = false;
             if (ev.type == SDL_JOYDEVICEADDED || ev.type == SDL_JOYDEVICEREMOVED) {
                 pad.devices.refresh();
-                if (pad.wizard.active()) {  // its picture of the axes at rest is per device index, now stale
-                    pad.wizard.cancel();
-                    game->say("CONTROLLERS CHANGED: SETUP CANCELLED, PRESS F3 AGAIN");
+                pad.setup.stop_listening();  // it holds the old device handles
+            }
+            if (ev.type == SDL_MOUSEBUTTONDOWN && pad.setup.active() && !pad.setup.listening()) {
+                const int row = setup_row_at(static_cast<float>(ev.button.x), static_cast<float>(ev.button.y));
+                if (row >= 0) {
+                    pad.setup.select(row);
+                    pad.setup.listen(pad.devices);
                 }
             }
             if (ev.type != SDL_KEYDOWN) continue;
             const SDL_Keycode key = ev.key.keysym.sym;
             const SDL_Scancode code = ev.key.keysym.scancode;
-            if ((code == SDL_SCANCODE_S || code == SDL_SCANCODE_DOWN) && !ev.key.repeat && !pad.wizard.active()) {
+            if (pad.setup.active()) {  // the setup screen has the keyboard
+                if (key == SDLK_ESCAPE && pad.setup.listening()) {
+                    pad.setup.stop_listening();
+                } else if (key == SDLK_ESCAPE || key == SDLK_F3) {
+                    pad.setup.close();
+                    game->say(pad.map.save(kBindingsFile) ? "CONTROLLER SAVED TO INPUT.CFG" : "COULD NOT SAVE INPUT.CFG");
+                } else if (key == SDLK_UP) {
+                    pad.setup.move(-1);
+                } else if (key == SDLK_DOWN) {
+                    pad.setup.move(1);
+                } else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) && !pad.setup.listening()) {
+                    pad.setup.listen(pad.devices);
+                } else if (key == SDLK_DELETE || key == SDLK_BACKSPACE) {
+                    pad.setup.clear(pad.map);
+                }
+                continue;
+            }
+            if ((code == SDL_SCANCODE_S || code == SDL_SCANCODE_DOWN) && !ev.key.repeat) {
                 if (brake_tap != 0 && ev.key.timestamp - brake_tap <= kDoubleTapMs) {
                     send(*game, Command::ToggleHandbrake);
                     brake_tap = 0;
@@ -968,12 +1017,7 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
             }
             Command a;
             if (key == SDLK_F3) {
-                if (pad.wizard.active()) pad.wizard.cancel();
-                else if (pad.devices.sticks().empty()) game->say("NO CONTROLLER CONNECTED");
-                else pad.wizard.start(pad.devices);
-            } else if (key == SDLK_ESCAPE && pad.wizard.active()) {
-                pad.wizard.skip(pad.map, pad.devices);
-                if (!pad.wizard.active()) pad.map.save(kBindingsFile);
+                pad.setup.open();
             } else if (key == SDLK_ESCAPE) {
                 running = false;
             } else if (key == SDLK_F11) {
@@ -989,21 +1033,20 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
                 send(*game, a);
             }
         }
-        const Uint8* keys = SDL_GetKeyboardState(nullptr);
+        const Uint8* keys = pad.setup.active() ? nullptr : SDL_GetKeyboardState(nullptr);
         Held held;
-        held.throttle = keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP];
-        held.brake = keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN];
-        held.clutch = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
-        held.starter = keys[SDL_SCANCODE_I];
-        held.cargo = keys[SDL_SCANCODE_G];
+        if (keys) {
+            held.throttle = keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP];
+            held.brake = keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN];
+            held.clutch = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
+            held.starter = keys[SDL_SCANCODE_I];
+            held.cargo = keys[SDL_SCANCODE_G];
+        }
         const Uint64 now = SDL_GetTicks64();
         const float frame_dt = std::min((now - last) / 1000.0f, 0.05f);
         last = now;
-        if (pad.wizard.active()) {
-            if (pad.wizard.poll(pad.map, pad.devices, frame_dt)) {
-                pad.map.save(kBindingsFile);
-                game->say("CONTROLLER SAVED TO INPUT.CFG");
-            }
+        if (pad.setup.active()) {
+            pad.setup.poll(pad.map, frame_dt);  // the world keeps running; nobody is on the pedals meanwhile
         } else {
             poll_pad(pad, *game, held);
         }
@@ -1056,7 +1099,7 @@ void write_wav(const std::string& path, const std::vector<float>& samples, int r
     std::fclose(f);
 }
 
-// Binds a virtual wheel, pedals and shifter through the wizard, then drives the game with it.
+// Binds a virtual wheel, pedals and shifter through the setup screen, then drives the game with it.
 // Returns the number of failed checks, or 0 if this SDL build has no virtual joysticks.
 #ifndef _WIN32
 // One HTTP GET against localhost; returns the whole response (headers and body), reading at most `limit` bytes.
@@ -1140,26 +1183,51 @@ int controller_test(SDL_Renderer* renderer, SDL_Surface* surface, Game& g, Minim
         SDL_JoystickUpdate();
     };
     auto wait = [&](float seconds) {
-        for (int i = 0, n = static_cast<int>(seconds * 60.0f); i < n; ++i) pad.wizard.poll(pad.map, pad.devices, 1.0f / 60.0f);
+        for (int i = 0, n = static_cast<int>(seconds * 60.0f); i < n; ++i) pad.setup.poll(pad.map, 1.0f / 60.0f);
     };
-    // Axis 0: throttle pedal resting at the bottom of its range. Axis 1: clutch pedal wired the other way up.
-    // Axis 2: a stick, centred; pulling it back is the brake. Buttons 0-6: shifter gates 1-6 and reverse.
-    axis(0, -32768);
+    auto listen_for = [&](int fn) {
+        pad.setup.select(fn);
+        pad.setup.listen(pad.devices);
+        wait(0.1f);
+    };
+    // Axis 0: throttle pedal resting at the bottom of its range, but reading 0 until it first moves (as SDL does
+    // with real pedals). Axis 1: clutch pedal wired the other way up. Axis 2: a stick, centred; pulling it back is
+    // the brake. Buttons 0-6: shifter gates 1-6 and reverse.
+    axis(0, 0);
     axis(1, 32767);
     axis(2, 0);
-    pad.wizard.start(pad.devices);
-    wait(0.5f);
+    pad.setup.open();
+    listen_for(input::Throttle);
     draw(renderer, g, map, &pad);
     SDL_SaveBMP(surface, (prefix + "0.bmp").c_str());
-    axis(0, 32767), wait(0.1f), axis(0, -32768), wait(0.5f);  // throttle
-    axis(2, -32768), wait(0.1f), axis(2, 0), wait(0.5f);      // brake
-    axis(1, -32768), wait(0.1f), axis(1, 32767), wait(0.5f);  // clutch
-    pad.wizard.skip(pad.map, pad.devices);                    // shift up
-    pad.wizard.skip(pad.map, pad.devices);                    // shift down
-    wait(0.5f);
-    for (int b = 0; b < 7; ++b) button(b, true), wait(0.1f), button(b, false), wait(0.5f);
-    check(pad.wizard.current() == input::Mode, "wizard reached the buttons after the shifter gates");
-    while (pad.wizard.active()) pad.wizard.skip(pad.map, pad.devices);
+    axis(0, -32768), wait(0.1f), axis(0, 32767), wait(0.3f);  // held at the floor: not bound yet
+    check(pad.setup.listening(), "an axis held fully applied is not bound until it is let go");
+    axis(0, -32768), wait(0.5f);
+    check(!pad.setup.listening(), "throttle bound once let go");
+    listen_for(input::Brake);
+    axis(2, -32768), wait(0.1f), axis(2, 0), wait(0.5f);
+    listen_for(input::Clutch);
+    axis(1, -32768), wait(0.1f), axis(1, 32767), wait(0.5f);
+    for (int b = 0; b < 7; ++b) {
+        listen_for(input::Gear1 + b);
+        button(b, true), wait(0.1f), button(b, false), wait(0.1f);
+    }
+    check(pad.map.b[input::Reverse].kind == input::Binding::Button && pad.map.b[input::Reverse].index == 6, "the reverse gate is bound");
+    button(3, true);  // a button already held when listening starts is not taken for the new binding
+    listen_for(input::Pave);
+    wait(0.3f);
+    check(pad.setup.listening(), "a button held from before is ignored");
+    button(3, false), wait(0.1f), button(3, true), wait(0.1f), button(3, false);
+    check(pad.map.b[input::Pave].kind == input::Binding::Button && pad.map.b[input::Pave].index == 3, "pressed again, it binds");
+    pad.setup.select(input::Pave);
+    pad.setup.clear(pad.map);
+    check(pad.map.b[input::Pave].kind == input::Binding::None, "a binding can be cleared");
+    pad.setup.close();
+    input::Map stick_button;  // an axis can stand in for a button: pressed past halfway
+    stick_button.b[input::Mode] = {input::Binding::Axis, input::Devices::name(j), 2, 0, -32768};
+    axis(2, -30000);
+    check(stick_button.button(input::Mode, pad.devices), "an axis bound to a button presses it past halfway");
+    axis(2, 0);
 
     axis(0, 0);
     check(std::abs(pad.map.axis(input::Throttle, pad.devices) - 0.5f) < 0.03f, "throttle pedal at half travel reads 0.5");
