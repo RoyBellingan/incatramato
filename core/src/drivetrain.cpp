@@ -48,7 +48,7 @@ Engine::Torque Engine::torque(float rpm, float throttle, bool running, bool exha
     // The throttle adds to whatever the governor is already giving, rather than competing with it: with
     // max(throttle, governor) the first fifth of the pedal did nothing at idle. Above idle the governor gives
     // nothing and the throttle is the demand, as before.
-    const float governor = std::clamp((idle_rpm - rpm) / 100.0f, 0.0f, 1.0f);
+    const float governor = std::clamp((idle_rpm - rpm) / governor_band, 0.0f, 1.0f);
     const float demand = governor + std::clamp(throttle, 0.0f, 1.0f) * (1.0f - governor);
     Torque t{demand * full - loss, demand * full};
     if (exhaust_brake_on && throttle < 0.02f && rpm > idle_rpm + 150.0f) t.net -= exhaust_brake * rpm / redline_rpm;

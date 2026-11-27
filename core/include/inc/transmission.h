@@ -12,6 +12,21 @@ enum class ShiftMode : std::uint8_t {
     Automatic,   // automated manual: picks the gear too
 };
 
+// How the automated boxes shift and pull away. Defaults here; data/tuning.json can change every one.
+struct ShiftParams {
+    float open_time = 0.10f;      // clutch travel before the gear is pulled [s]
+    float max_sync_time = 0.35f;  // longest wait for the revs to match [s]
+    float close_time = 0.25f;     // clutch re-engagement [s]
+    float min_shift_gap = 1.0f;   // automatic: time between shifts [s]
+    // Automatic shift points, as fractions of the redline: up at base + per_throttle * throttle, down likewise.
+    float up_base = 0.55f, up_per_throttle = 0.30f;
+    float down_base = 0.36f, down_per_throttle = 0.14f;
+    // Pulling away: the clutch bites as either side rises from launch_revs * idle over launch_span * idle...
+    float launch_revs = 1.1f, launch_span = 0.5f;
+    // ...and a touch of throttle bites up to launch_touch of the clutch's capacity, all of it by launch_touch_throttle.
+    float launch_touch = 0.15f, launch_touch_throttle = 0.1f;
+};
+
 struct DriverInput {
     float throttle = 0.0f;
     float brake = 0.0f;
@@ -31,6 +46,7 @@ struct DriverInput {
 class ShiftController {
 public:
     ShiftMode mode = ShiftMode::Automatic;
+    ShiftParams params;
 
     Controls update(const DriverInput& in, const Rig& rig, float dt);
 

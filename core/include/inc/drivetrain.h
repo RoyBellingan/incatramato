@@ -16,6 +16,7 @@ struct Engine {
     float friction;        // internal losses at redline [N*m]
     float exhaust_brake;   // extra retarding torque at redline with the exhaust brake on [N*m]
     float starter_torque;  // [N*m]
+    float governor_band = 100.0f;  // the idle governor goes from no fuel at idle to full this far below it [rpm]
 
     struct Torque {
         float net;        // at the flywheel

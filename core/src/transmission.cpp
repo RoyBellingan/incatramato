@@ -7,10 +7,6 @@ namespace inc {
 namespace {
 
 constexpr float kRadToRpm = 60.0f / (2.0f * 3.14159265f);
-constexpr float kOpenTime = 0.10f;      // clutch travel before the gear is pulled [s]
-constexpr float kMaxSyncTime = 0.35f;   // longest wait for the revs to match [s]
-constexpr float kCloseTime = 0.25f;     // clutch re-engagement [s]
-constexpr float kMinShiftGap = 1.0f;    // automatic: time between shifts [s]
 
 }  // namespace
 
@@ -56,7 +52,7 @@ Controls ShiftController::update(const DriverInput& in, const Rig& rig, float dt
         target_ = 0;
     } else if (target_ * dir <= 0) {  // neutral, or the other direction: change over only when stopped
         if (target_ == 0 || stopped) target_ = dir;
-    } else if (phase_ == Phase::Idle && since_shift_ > kMinShiftGap) {
+    } else if (phase_ == Phase::Idle && since_shift_ > params.min_shift_gap) {
         // Shift points move up with the throttle. Upshifts are judged on road speed, so wheelspin in mud
         // does not trigger them; downshifts need the engine to be lugging as well as the road speed to be low.
         // Reverse works the same way through its own gears (a dozer has three).
@@ -64,8 +60,8 @@ Controls ShiftController::update(const DriverInput& in, const Rig& rig, float dt
             return std::abs(rig.speed() / spec.wheel_radius * spec.gearbox.ratio(g, rig.low_range())) * kRadToRpm;
         };
         const int n = std::abs(target_), highest = dir > 0 ? top : top_reverse;
-        const float up = engine.redline_rpm * (0.55f + 0.30f * in.throttle);
-        const float down = engine.redline_rpm * (0.36f + 0.14f * in.throttle);
+        const float up = engine.redline_rpm * (params.up_base + params.up_per_throttle * in.throttle);
+        const float down = engine.redline_rpm * (params.down_base + params.down_per_throttle * in.throttle);
         if (rpm > up && n < highest && road_rpm(dir * (n + 1)) > 1.1f * down) target_ += dir;
         else if (n > 1 && road_rpm(target_) < down && rpm < 1.15f * down) target_ -= dir;
     }
@@ -76,8 +72,10 @@ Controls ShiftController::update(const DriverInput& in, const Rig& rig, float dt
     float pedal = 0.0f;
     if (target_ != 0 && !(rig.clutch_locked() && rpm > 1.08f * engine.idle_rpm)) {
         const float fastest = std::max(rpm, std::abs(rig.input_rpm(target_)));
-        const float revs = std::clamp((fastest - 1.1f * engine.idle_rpm) / (0.5f * engine.idle_rpm), 0.0f, 1.0f);
-        const float asked = in.throttle > 0.01f ? 0.15f * std::clamp(in.throttle / 0.1f, 0.0f, 1.0f) : 0.0f;
+        const float revs =
+            std::clamp((fastest - params.launch_revs * engine.idle_rpm) / (params.launch_span * engine.idle_rpm), 0.0f, 1.0f);
+        const float asked =
+            in.throttle > 0.01f ? params.launch_touch * std::clamp(in.throttle / params.launch_touch_throttle, 0.0f, 1.0f) : 0.0f;
         const float bite = std::max(revs, asked);
         pedal = bite >= 1.0f ? 0.0f : 0.8f - 0.6f * bite;
     }
@@ -96,7 +94,7 @@ Controls ShiftController::update(const DriverInput& in, const Rig& rig, float dt
             u.gear = rig.gear();
             u.clutch = 1.0f;
             u.throttle = 0.0f;
-            if (timer_ >= kOpenTime) {
+            if (timer_ >= params.open_time) {
                 phase_ = Phase::Sync;
                 timer_ = 0.0f;
             }
@@ -107,7 +105,7 @@ Controls ShiftController::update(const DriverInput& in, const Rig& rig, float dt
             u.gear = target_;
             u.clutch = 1.0f;
             u.throttle = target_ == 0 ? 0.0f : std::clamp((want - rpm) / 300.0f, 0.0f, 1.0f);
-            if (rig.gear() == target_ && (std::abs(rpm - want) < 100.0f || timer_ >= kMaxSyncTime)) {
+            if (rig.gear() == target_ && (std::abs(rpm - want) < 100.0f || timer_ >= params.max_sync_time)) {
                 phase_ = Phase::Close;
                 timer_ = 0.0f;
                 since_shift_ = 0.0f;
@@ -115,7 +113,7 @@ Controls ShiftController::update(const DriverInput& in, const Rig& rig, float dt
             break;
         }
         case Phase::Close: {
-            const float k = std::min(timer_ / kCloseTime, 1.0f);
+            const float k = std::min(timer_ / params.close_time, 1.0f);
             u.gear = target_;
             u.clutch = std::max(pedal, 1.0f - k);
             u.throttle = in.throttle * k;

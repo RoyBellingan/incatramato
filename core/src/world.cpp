@@ -7,32 +7,40 @@ namespace inc {
 namespace {
 
 constexpr float kG = 9.81f;
-constexpr float kSettleTime = 2.0f;  // a fresh heap keeps slumping this long after tipping stops [s]
 
 // Force to shove a heap of loose gravel [N].
-float push_force(float pile_m3) { return kPushFriction * kGravelDensity * kG * pile_m3; }
+float push_force(const Rules& r, float pile_m3) { return r.push_friction * r.gravel_density * kG * pile_m3; }
 
 // Extent of a vehicle along the lane: its footprints, and the blade in front if it has one.
-void extent(const Machine& m, float& lo, float& hi) {
+void extent(const Machine& m, const Rules& r, float& lo, float& hi) {
     const VehicleSpec& s = m.rig.spec();
     lo = 1e30f, hi = -1e30f;
     for (const WheelSpec& w : s.wheels) {
         lo = std::min(lo, w.x - 0.5f * s.tyre.length);
         hi = std::max(hi, w.x + 0.5f * s.tyre.length);
     }
-    if (m.has_blade) hi = std::max(hi, kBladeAhead);
+    if (m.has_blade) hi = std::max(hi, r.blade_ahead);
     lo += m.rig.x(), hi += m.rig.x();
 }
 
 }  // namespace
 
-World::World(presets::Course course, float quarry_end, float town_start)
-    : course_(std::move(course)), quarry_end_(quarry_end), town_start_(town_start) {}
+World::World(presets::Course course, float quarry_end, float town_start, Tuning tuning)
+    : course_(std::move(course)), quarry_end_(quarry_end), town_start_(town_start), tuning_(std::move(tuning)) {}
 
-int World::add_machine(std::string label, VehicleSpec spec, float x, float capacity, bool has_blade) {
-    machines_.push_back({std::move(label), Rig(std::move(spec), course_.terrain, SoilParams{}, x, course_.lane_y), x, capacity,
-                         has_blade});
+int World::add_machine(std::string label, const std::string& vehicle, const std::string& tyre, float x, float capacity, bool has_blade) {
+    machines_.push_back({std::move(label), vehicle, tyre, Rig(tuning_.spec(vehicle, tyre), course_.terrain, tuning_.soil, x, course_.lane_y),
+                         x, capacity, has_blade});
+    machines_.back().box.params = tuning_.shift;
     return static_cast<int>(machines_.size()) - 1;
+}
+
+void World::retune(const Tuning& tuning) {
+    tuning_ = tuning;
+    for (Machine& m : machines_) {
+        m.rig.retune(tuning_.spec(m.vehicle, m.tyre), tuning_.soil);
+        m.box.params = tuning_.shift;
+    }
 }
 
 PlayerId World::join() {
@@ -156,8 +164,8 @@ void World::command(PlayerId player, Command c) {
             say(player, vi, K::BladeLayer, v.blade_layer);
             break;
         case Command::Pave: {
-            const int n = t.pave(under, kMinBase);
-            say(player, vi, K::Paved, static_cast<float>(n) * t.cell_size() * t.cell_size(), kMinBase);
+            const int n = t.pave(under, rules().min_base);
+            say(player, vi, K::Paved, static_cast<float>(n) * t.cell_size() * t.cell_size(), rules().min_base);
             break;
         }
         case Command::Roll: {
@@ -167,7 +175,7 @@ void World::command(PlayerId player, Command c) {
         }
         case Command::Recover: {
             const ShiftMode mode = v.box.mode;
-            v.rig = Rig(v.rig.spec(), t, SoilParams{}, v.home_x, course_.lane_y);
+            v.rig = Rig(v.rig.spec(), t, tuning_.soil, v.home_x, course_.lane_y);
             v.lever = 0;
             v.box = ShiftController{};
             v.box.mode = mode;
@@ -180,8 +188,8 @@ void World::command(PlayerId player, Command c) {
 
 // The blade stops holding its heap: the face it was pressed against slumps to the angle of repose.
 void World::let_go(Machine& m) {
-    m.settle_x = m.rig.x() + kBladeAhead;
-    m.settle_left = kSettleTime;
+    m.settle_x = m.rig.x() + rules().blade_ahead;
+    m.settle_left = rules().settle_time;
 }
 
 void World::tick() {
@@ -191,6 +199,7 @@ void World::tick() {
 
 void World::tick_machine(Machine& m) {
     Terrain& t = course_.terrain;
+    const Rules& rl = rules();
     const int vi = static_cast<int>(&m - machines_.data());
 
     // Inputs: the driver's held controls, or nobody on the pedals.
@@ -200,7 +209,7 @@ void World::tick_machine(Machine& m) {
     m.in.clutch = held.clutch;
     m.in.starter = held.starter;
     m.in.gear = m.lever;
-    m.rig.set_payload(m.gravel * kGravelDensity);  // what is in the bed weighs on the wheels under it
+    m.rig.set_payload(m.gravel * rl.gravel_density);  // what is in the bed weighs on the wheels under it
 
     const float x0 = m.rig.x();
     for (int i = 0; i < kStepsPerTick; ++i) {
@@ -217,29 +226,29 @@ void World::tick_machine(Machine& m) {
     // another vehicle: gravel on or against a vehicle is always a mistake, and not something to simulate.
     m.tipping = false;
     if (held.tip && m.capacity > 0.0f && m.gravel > 0.0f && x >= quarry_end_) {
-        const float land = x + kTipAhead;
+        const float land = x + rl.tip_ahead;
         int blocker = -1;
         for (const Machine& o : machines_) {
             if (&o == &m) continue;
             float lo, hi;
-            extent(o, lo, hi);
-            if (land > lo - kTipClearance && land < hi + kTipClearance) blocker = static_cast<int>(&o - machines_.data());
+            extent(o, rl, lo, hi);
+            if (land > lo - rl.tip_clearance && land < hi + rl.tip_clearance) blocker = static_cast<int>(&o - machines_.data());
         }
         if (blocker >= 0) {
             if (!m.tip_refused) say(m.driver, vi, Event::Kind::TipBlocked, static_cast<float>(blocker));  // once, not every tick
             m.tip_refused = true;
         } else {
             m.tip_refused = false;
-            const float out = std::min(m.gravel, kTipRate * kTickDt);
+            const float out = std::min(m.gravel, rl.tip_rate * kTickDt);
             m.gravel = m.gravel - out < 1e-3f ? 0.0f : m.gravel - out;
             // The load pours out over the whole tailgate, not from one point: a wider, lower heap than a cone
             // (10 m3: about 1.4 m high and 5.5 m across instead of 1.6 m and 5 m).
             constexpr int kPour = 5;
             for (int k = 0; k < kPour; ++k)
-                t.dump_gravel(land, course_.lane_y + kTipWidth * (static_cast<float>(k) / (kPour - 1) - 0.5f), out / kPour);
+                t.dump_gravel(land, course_.lane_y + rl.tip_width * (static_cast<float>(k) / (kPour - 1) - 0.5f), out / kPour);
             m.tipping = true;
             m.settle_x = land;
-            m.settle_left = kSettleTime;
+            m.settle_left = rl.settle_time;
             if (m.gravel <= 0.0f) say(m.driver, vi, Event::Kind::BedEmpty);
         }
     } else {
@@ -252,7 +261,7 @@ void World::tick_machine(Machine& m) {
         float rear = 1e30f;
         for (const WheelSpec& w : s.wheels) rear = std::min(rear, w.x - 0.5f * s.tyre.length);
         rear += x;
-        const float ly = course_.lane_y, half = 0.5f * kBladeWidth + 3.0f;
+        const float ly = course_.lane_y, half = 0.5f * rl.blade_width + 3.0f;
         t.settle({rear - 8.0f, ly - half, rear - t.cell_size(), ly + half}, 4);
         m.trail_left -= kTickDt;
     }
@@ -288,13 +297,13 @@ void World::tick_machine(Machine& m) {
             m.blade_edge = base / static_cast<float>(wheels.size()) + m.blade_layer;
             // Set below the original ground, the blade also rips up asphalt it passes under: the way to remove a
             // road laid in the wrong place. At or above ground level it only scrapes loose gravel off a road.
-            const PushResult r = t.push({x + kBladeAhead, m.rig.y(), 1.0f, 0.0f, kBladeWidth, m.blade_edge, std::max(0.0f, x - x0),
+            const PushResult r = t.push({x + rl.blade_ahead, m.rig.y(), 1.0f, 0.0f, rl.blade_width, m.blade_edge, std::max(0.0f, x - x0),
                                          m.blade_layer < -0.01f});
             m.blade_pile = r.pile;
             m.ripping = r.ripped > 0;
-            m.trail_left = kSettleTime;
+            m.trail_left = rl.settle_time;
         }
-        m.blade_force = push_force(m.blade_pile);
+        m.blade_force = push_force(rl, m.blade_pile);
         external += m.blade_force;
     }
 
@@ -316,7 +325,7 @@ void World::tick_machine(Machine& m) {
             const float belly = ground / static_cast<float>(s.wheels.size()) + s.clearance;
             const PushResult r = t.push({x + lead + dir * 0.5f * s.tyre.length, m.rig.y() + 0.5f * (ymin + ymax), dir, 0.0f, gap, belly,
                                          std::abs(x - x0)});
-            external += push_force(r.pile);
+            external += push_force(rl, r.pile);
         }
     }
     m.rig.set_external_resistance(external);
@@ -338,7 +347,7 @@ void World::tick_machine(Machine& m) {
     }
 }
 
-std::unique_ptr<World> make_playground() {
+std::unique_ptr<World> make_playground(const Tuning& tuning) {
     // 180 m of firm ground with 40 m of half-metre-deep mud between the quarry (up to 45 m) and the town (from 120 m).
     presets::Course c{Terrain(720, 48, 0.25f), 6.0f, 16.0f, 150.0f, {60.0f, 0.0f, 100.0f, 12.0f}, {58.0f, 3.5f, 102.0f, 8.5f}};
     Cell mud;
@@ -346,10 +355,10 @@ std::unique_ptr<World> make_playground() {
     mud.soft = 0.5f;
     c.terrain.fill(c.mud, mud);
     c.terrain.take_deltas();
-    auto w = std::make_unique<World>(std::move(c), 45.0f, 120.0f);
-    w->add_machine("STOCK TRUCK - HIGHWAY TYRES", presets::truck_6x6(presets::highway_tyre()), 14.0f, kLoad, false);
-    w->add_machine("OFFROAD TRUCK - MUD TYRES", presets::truck_6x6(presets::mud_tyre()), 24.0f, kLoad, false);
-    w->add_machine("DOZER - TRACKED", presets::dozer(), 34.0f, 0.0f, true);
+    auto w = std::make_unique<World>(std::move(c), 45.0f, 120.0f, tuning);
+    w->add_machine("STOCK TRUCK - HIGHWAY TYRES", "truck_6x6", "highway", 14.0f, tuning.rules.load, false);
+    w->add_machine("OFFROAD TRUCK - MUD TYRES", "truck_6x6", "mud", 24.0f, tuning.rules.load, false);
+    w->add_machine("DOZER - TRACKED", "dozer", "track", 34.0f, 0.0f, true);
     return w;
 }
 

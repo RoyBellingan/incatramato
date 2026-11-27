@@ -11,6 +11,7 @@
 
 #include "inc/presets.h"
 #include "inc/transmission.h"
+#include "inc/tuning.h"
 
 namespace inc {
 
@@ -19,18 +20,6 @@ using PlayerId = std::uint8_t;
 inline constexpr float kStepDt = 1e-3f;  // physics step [s]
 inline constexpr int kStepsPerTick = 20;
 inline constexpr float kTickDt = kStepDt * kStepsPerTick;  // 20 ms: the world advances 50 times a second
-
-// Rules of the playground site. Placeholders, like every number in the core.
-inline constexpr float kLoad = 10.0f;            // gravel per truck load at the quarry [m3]
-inline constexpr float kMinBase = 0.15f;         // gravel needed under asphalt [m]
-inline constexpr float kTipAhead = 6.2f;         // tipped gravel lands this far ahead; nothing turns round in one lane [m]
-inline constexpr float kTipRate = 1.5f;          // gravel out of the bed while tipping [m3/s]
-inline constexpr float kTipWidth = 2.2f;         // the load pours over the tailgate along this width [m]
-inline constexpr float kTipClearance = 3.0f;     // no tipping this close to another vehicle: a full heap spreads ~2.4 m [m]
-inline constexpr float kBladeAhead = 2.05f;      // cutting edge ahead of the dozer's centre [m]
-inline constexpr float kBladeWidth = 3.4f;       // [m]
-inline constexpr float kGravelDensity = 1800.0f; // loose aggregate [kg/m3]
-inline constexpr float kPushFriction = 0.5f;     // force to shove a heap, per unit of its weight
 
 // Discrete things a player does, sent when they happen. Each acts on the vehicle the player is driving.
 enum class Command : std::uint8_t {
@@ -76,6 +65,7 @@ struct Event {
 // A vehicle on the site, with the tools it carries.
 struct Machine {
     std::string label;
+    std::string vehicle, tyre;  // what it is built from in the tuning (Tuning::spec)
     Rig rig;
     float home_x;     // where Recover puts it
     float capacity;   // bed [m3]; 0 without one
@@ -107,11 +97,16 @@ struct Machine {
 class World {
 public:
     // quarry_end: loading only before this x; tipping only after. town_start: the trip ends here.
-    World(presets::Course course, float quarry_end, float town_start);
+    World(presets::Course course, float quarry_end, float town_start, Tuning tuning = Tuning::defaults());
     World(const World&) = delete;  // vehicles point at the terrain
     World& operator=(const World&) = delete;
 
-    int add_machine(std::string label, VehicleSpec spec, float x, float capacity, bool has_blade);
+    // A vehicle from the tuning (e.g. "truck_6x6") fitted with a tyre from it (e.g. "mud").
+    int add_machine(std::string label, const std::string& vehicle, const std::string& tyre, float x, float capacity, bool has_blade);
+    // Applies new tuning to the running world: vehicles keep where they are and what they are doing.
+    void retune(const Tuning& tuning);
+    const Tuning& tuning() const { return tuning_; }
+    const Rules& rules() const { return tuning_.rules; }
 
     PlayerId join();  // seats the new player in the first free vehicle (shared if none is free)
     void command(PlayerId player, Command c);
@@ -144,6 +139,7 @@ private:
 
     presets::Course course_;
     float quarry_end_, town_start_;
+    Tuning tuning_;
     std::vector<Machine> machines_;
     std::vector<Player> players_;
     std::vector<Event> events_;
@@ -151,6 +147,6 @@ private:
 };
 
 // The playground: 180 m with 40 m of mud, a stock truck, an off-road truck and a dozer at the quarry.
-std::unique_ptr<World> make_playground();
+std::unique_ptr<World> make_playground(const Tuning& tuning = Tuning::defaults());
 
 }  // namespace inc

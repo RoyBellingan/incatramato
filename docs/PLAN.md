@@ -90,6 +90,8 @@ once M1 is done.
   leading axle instead of lifting the vehicle; no tipping within 3 m of another vehicle.
 - Per-wheel and body telemetry from the rig, served live to a browser by the playground.
 - Fuel burn, high-centring, grades.
+- Tuning: every placeholder number lives in `data/tuning.json`, reloadable in the running game (a first step
+  towards M6, content as data).
 - Payload: cargo weighs on the wheels that carry it. Brakes and handbrake hold a stopped vehicle on a slope.
 
 ## Known gaps in the core

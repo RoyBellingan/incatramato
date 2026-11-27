@@ -1,0 +1,163 @@
+// Incatramato tuning. Edit, then press F6 in the game to apply it to the running world (F5 resets the world with
+// it). Anything left out keeps its built-in value; an unknown key is reported in the terminal as a probable typo.
+// Units are SI: metres, kilograms, seconds, newtons, newton-metres, rpm. Every number is a placeholder to tune.
+{
+  // Soft ground (mud): Bekker pressure-sinkage and Janosi-Hanamoto shear.
+  "soil": {
+    "n": 0.5,            // sinkage exponent
+    "k_c": 13000,        // cohesive modulus [Pa/m^(n-1)]
+    "k_phi": 200000,     // frictional modulus [Pa/m^n]
+    "cohesion": 4000,    // [Pa]
+    "tan_phi": 0.23,     // tangent of the internal friction angle
+    "shear_k": 0.025,    // shear deformation modulus [m]: lower, full traction at less slip
+    "dig_rate": 0.1,     // rut depth dug per metre of wheel slip [m/m]
+    "rut_drag": 0.5,     // extra rolling resistance per metre of rut depth
+    "viscous": 0.15      // growth of soft-ground resistance with speed [s/m]
+  },
+
+  // Hard surfaces. Grip is per tyre (below); rolling resistance is per surface.
+  "surfaces": {
+    "crr_firm": 0.035,
+    "crr_gravel": 0.025,
+    "crr_laid": 0.020,         // asphalt laid, not yet rolled
+    "crr_rolled": 0.008,
+    "laid_grip": 0.8,          // unrolled asphalt grips this fraction of rolled
+    "hard_slip_gain": 12,      // how fast traction builds with slip on hard ground
+    "gravel_full_cover": 0.15  // gravel this thick and the wheel no longer feels what is under it [m]
+  },
+
+  // Tyres and tracks. grip: traction / load at full slip on each hard surface.
+  "tyres": {
+    "highway": {
+      "width": 0.30, "length": 0.30,  // contact patch [m]
+      "soft_grip": 0.8,               // multiplier on the mud's shear strength
+      "crr_scale": 1.0,               // multiplier on hard-surface rolling resistance
+      "grip": { "firm": 0.55, "wet": 0.30, "gravel": 0.36, "asphalt": 0.90 }
+    },
+    "mud": {
+      "width": 0.45, "length": 0.50,
+      "soft_grip": 1.3,
+      "crr_scale": 1.6,
+      "grip": { "firm": 0.60, "wet": 0.38, "gravel": 0.42, "asphalt": 0.75 }
+    },
+    "track": {
+      "width": 0.60, "length": 3.00,
+      "soft_grip": 1.8,
+      "crr_scale": 2.0,
+      "grip": { "firm": 0.90, "wet": 0.60, "gravel": 0.50, "asphalt": 0.45 }
+    }
+  },
+
+  // Vehicles. The stock and off-road trucks are both truck_6x6, on highway and mud tyres; the dozer runs on track.
+  // Wheels can move and their load shares change, but their number is fixed by the driveline in code.
+  "vehicles": {
+    "truck_6x6": {
+      "mass": 14000,           // empty [kg]
+      "wheel_radius": 0.55,
+      "wheel_inertia": 20,     // [kg m^2]
+      "clearance": 0.40,       // sinkage at which the chassis starts dragging [m]
+      "brake_torque": 12000,   // per wheel, full brake [N m]
+      "clutch_max_torque": 3000,
+      "engine": {
+        "torque_curve": [[600, 900], [1000, 1300], [1400, 1400], [1800, 1300], [2200, 1100], [2500, 900]],  // [rpm, N m] at full load
+        "idle_rpm": 650,
+        "redline_rpm": 2500,
+        "stall_rpm": 350,
+        "inertia": 2.5,          // [kg m^2]
+        "friction": 180,         // internal losses at the redline [N m]
+        "exhaust_brake": 600,    // extra retarding torque at the redline [N m]
+        "starter_torque": 400,
+        "governor_band": 100     // the idle governor goes from no fuel at idle to full this far below it [rpm]
+      },
+      "gearbox": {
+        "forward": [7.0, 4.0, 2.5, 1.6, 1.0, 0.75],
+        "reverse": [6.5],
+        "final_drive": 5.5,
+        "low_range": 2.0
+      },
+      // x forward of the centre, y across (negative: left). load: share of the empty weight; payload: share of
+      // the gravel in the bed. handbrake: the parking brake acts on this wheel.
+      "wheels": [
+        { "x":  2.2, "y": -1.0, "load": 0.150, "payload": 0.050, "handbrake": false },
+        { "x":  2.2, "y":  1.0, "load": 0.150, "payload": 0.050, "handbrake": false },
+        { "x": -1.6, "y": -1.0, "load": 0.175, "payload": 0.225, "handbrake": true },
+        { "x": -1.6, "y":  1.0, "load": 0.175, "payload": 0.225, "handbrake": true },
+        { "x": -2.9, "y": -1.0, "load": 0.175, "payload": 0.225, "handbrake": true },
+        { "x": -2.9, "y":  1.0, "load": 0.175, "payload": 0.225, "handbrake": true }
+      ]
+    },
+    "dozer": {
+      "mass": 20000,
+      "wheel_radius": 0.45,    // sprocket
+      "wheel_inertia": 80,
+      "clearance": 0.45,
+      "brake_torque": 40000,
+      "clutch_max_torque": 2500,
+      "engine": {
+        "torque_curve": [[800, 900], [1200, 1100], [1600, 1050], [2000, 900], [2200, 800]],
+        "idle_rpm": 800,
+        "redline_rpm": 2200,
+        "stall_rpm": 400,
+        "inertia": 3.0,
+        "friction": 160,
+        "exhaust_brake": 400,
+        "starter_torque": 400,
+        "governor_band": 100
+      },
+      "gearbox": {
+        "forward": [3.0, 1.8, 1.1],
+        "reverse": [2.6, 1.55, 0.95],  // a little faster than forward, for the run back
+        "final_drive": 22.0,
+        "low_range": 1.0
+      },
+      "wheels": [
+        { "x": 0.0, "y": -1.0, "load": 0.5, "handbrake": true },
+        { "x": 0.0, "y":  1.0, "load": 0.5, "handbrake": true }
+      ]
+    }
+  },
+
+  // The automated gearboxes (sequential and automatic).
+  "shifting": {
+    "open_time": 0.10,      // clutch out before the gear is pulled [s]
+    "max_sync_time": 0.35,  // longest wait for the revs to match [s]
+    "close_time": 0.25,     // clutch back in [s]
+    "min_shift_gap": 1.0,   // automatic: least time between shifts [s]
+    // Automatic shift points, as fractions of the redline: up at up_base + up_per_throttle * throttle.
+    "up_base": 0.55, "up_per_throttle": 0.30,
+    "down_base": 0.36, "down_per_throttle": 0.14,
+    // Pulling away: the clutch bites as the revs rise from launch_revs x idle, over launch_span x idle...
+    "launch_revs": 1.1, "launch_span": 0.5,
+    // ...and a touch of throttle bites up to launch_touch of its capacity, all of it by launch_touch_throttle.
+    "launch_touch": 0.15, "launch_touch_throttle": 0.1
+  },
+
+  // Site rules.
+  "rules": {
+    "load": 10,               // gravel per truck load [m3]
+    "min_base": 0.15,         // gravel needed under asphalt [m]
+    "tip_ahead": 6.2,         // tipped gravel lands this far ahead of the truck [m]
+    "tip_rate": 1.5,          // [m3/s]
+    "tip_width": 2.2,         // the load pours over the tailgate across this width [m]
+    "tip_clearance": 3.0,     // no tipping this close to another vehicle [m]
+    "blade_ahead": 2.05,      // the dozer's cutting edge ahead of its centre [m]
+    "blade_width": 3.4,
+    "gravel_density": 1800,   // [kg/m3]: a full load weighs 18 t
+    "push_friction": 0.5,     // force to shove a heap, per unit of its weight
+    "settle_time": 2.0        // a fresh heap keeps slumping this long [s]
+  },
+
+  // Controllers: how far a pedal or lever is pressed becomes the pedal position through a dead zone at both ends
+  // and a curve, position ^ gamma (1 straight; 2 gentle at first; 0.5 sharp at first). The keyboard pedals ramp
+  // at these rates, in full travel per second.
+  "pedals": {
+    "throttle": { "deadzone": 0.04, "gamma": 1.0 },
+    "brake":    { "deadzone": 0.04, "gamma": 1.0 },
+    "clutch":   { "deadzone": 0.04, "gamma": 1.0 },
+    "keyboard": {
+      "throttle_up": 3, "throttle_down": 6,
+      "brake_up": 6, "brake_down": 8,
+      "clutch_down": 10, "clutch_up": 1.6
+    }
+  }
+}

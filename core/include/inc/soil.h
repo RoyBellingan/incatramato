@@ -18,6 +18,12 @@ struct SoilParams {
     float dig_rate = 0.1f;   // rut depth gained per metre of wheel slip [m/m]
     float rut_drag = 0.5f;   // extra rolling resistance coefficient per metre of rut depth
     float viscous = 0.15f;   // growth of soft-ground resistance with speed [s/m]
+
+    // Hard surfaces. Grip is per tyre (Grip); rolling resistance coefficients are per surface.
+    float crr_firm = 0.035f, crr_gravel = 0.025f, crr_laid = 0.020f, crr_rolled = 0.008f;
+    float laid_grip = 0.8f;           // fresh asphalt, not yet rolled, grips this much of rolled asphalt
+    float hard_slip_gain = 12.0f;     // how quickly traction builds with slip on hard surfaces
+    float gravel_full_cover = 0.15f;  // gravel this thick and the wheel no longer touches what is under it [m]
 };
 
 // Friction coefficient (traction / load at full slip) of a tyre or track on each hard surface. Tracks and tyres

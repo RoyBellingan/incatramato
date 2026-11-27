@@ -8,7 +8,12 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Boost.JSON reads data/tuning.json. Header-only: Boost's headers are needed, no Boost library.
+find_package(Boost 1.75 CONFIG REQUIRED)
+
 add_library(inc_core
+  core/src/json.cpp
+  core/src/tuning.cpp
   core/src/terrain.cpp
   core/src/soil.cpp
   core/src/drivetrain.cpp
@@ -17,6 +22,7 @@ add_library(inc_core
   core/src/presets.cpp
   core/src/world.cpp)
 target_include_directories(inc_core PUBLIC core/include)
+target_link_libraries(inc_core PUBLIC Boost::headers)
 target_compile_options(inc_core PUBLIC -Wall -Wextra -Wpedantic)
 
 add_executable(loop_demo apps/loop_demo.cpp)
@@ -29,12 +35,14 @@ find_package(SDL2 2.0.18 QUIET)
 if(SDL2_FOUND)
   add_executable(play apps/play.cpp)
   target_link_libraries(play PRIVATE inc_core SDL2::SDL2)
+  target_compile_definitions(play PRIVATE INC_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 else()
   message(STATUS "SDL2 not found: skipping the 'play' app")
 endif()
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE inc_core)
+target_compile_definitions(core_tests PRIVATE INC_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 add_test(NAME core_tests COMMAND core_tests)
 if(TARGET play)
   add_test(NAME play_selftest COMMAND play --selftest ${CMAKE_BINARY_DIR}/selftest_)

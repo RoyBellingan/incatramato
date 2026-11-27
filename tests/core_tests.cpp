@@ -6,6 +6,7 @@
 
 #include "inc/presets.h"
 #include "inc/transmission.h"
+#include "inc/tuning.h"
 #include "inc/world.h"
 
 using namespace inc;
@@ -820,6 +821,66 @@ void a_touch_of_throttle_moves_the_truck() {
     CHECK(speed_after(0.3f) > speed_after(0.15f) + 1.0f);
 }
 
+// The shipped data/tuning.json loads cleanly: every key known, every value valid.
+void shipped_tuning_loads_cleanly() {
+    Tuning t = Tuning::defaults();
+    const TuningResult r = load_tuning(INC_DATA_DIR "/tuning.json", t);
+    CHECK(r.ok);
+    if (!r.ok) std::printf("  %s\n", r.error.c_str());
+    for (const std::string& w : r.warnings) std::printf("  warning: %s\n", w.c_str());
+    CHECK(r.warnings.empty());
+}
+
+// A partial file overrides only what it says; typos are warnings; mistakes are refused and change nothing.
+void tuning_overrides_and_refuses() {
+    Tuning t = Tuning::defaults();
+    TuningResult r = load_tuning_text(R"({
+        // comments and trailing commas are fine
+        "rules": { "tip_rate": 3.0, },
+        "tyres": { "mud": { "grip": { "gravel": 0.5 } } },
+        "vehicles": { "dozer": { "mass": 25000, "engine": { "idle_rpm": 700 } } },
+        "shifting": { "up_base": 0.6, "colour": "red" },
+    })", t);
+    CHECK(r.ok);
+    CHECK(t.rules.tip_rate == 3.0f && t.rules.tip_width == kTipWidth);
+    CHECK(t.tyres.at("mud").grip.gravel == 0.5f && t.tyres.at("mud").grip.firm == 0.60f);
+    CHECK(t.vehicles.at("dozer").mass == 25000.0f && t.vehicles.at("dozer").engine.idle_rpm == 700.0f);
+    CHECK(t.shift.up_base == 0.6f);
+    CHECK(r.warnings.size() == 1 && r.warnings[0].find("shifting.colour") != std::string::npos);
+
+    const Tuning before = t;
+    r = load_tuning_text("{\n  \"rules\": {\n    \"tip_rate\": 2.0\n    \"load\": 8\n  }\n}", t, "x.json");  // missing comma
+    CHECK(!r.ok && r.error.rfind("x.json:4:", 0) == 0);
+    r = load_tuning_text(R"({ "rules": { "tip_rate": 2.0 }, "vehicles": { "dozer": { "mass": "heavy" } } })", t);
+    CHECK(!r.ok && r.error.find("vehicles.dozer.mass") != std::string::npos);
+    r = load_tuning_text(R"({ "vehicles": { "truck_6x6": { "wheels": [ { "x": 1 } ] } } })", t);
+    CHECK(!r.ok && r.error.find("exactly 6 wheels") != std::string::npos);
+    r = load_tuning_text(R"({ "vehicles": { "dozer": { "engine": { "torque_curve": [[1000, 900], [800, 1000]] } } } })", t);
+    CHECK(!r.ok);
+    CHECK(t.rules.tip_rate == before.rules.tip_rate && t.vehicles.at("dozer").mass == before.vehicles.at("dozer").mass);
+}
+
+// Retuning a running world: vehicles stay where they are, moving as they were, with the new numbers.
+void retuning_keeps_the_world_running() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    w->command(me, Command::Gear1);
+    PlayerControls go;
+    go.throttle = 1.0f;
+    w->controls(me, go);
+    for (int i = 0; i < 150; ++i) w->tick();
+    const Machine& truck = w->machine(w->vehicle_of(me));
+    const float x = truck.rig.x(), v = truck.rig.speed();
+    Tuning t = w->tuning();
+    t.vehicles.at("truck_6x6").mass = 20000.0f;
+    t.rules.tip_rate = 3.0f;
+    w->retune(t);
+    CHECK(truck.rig.x() == x && truck.rig.speed() == v);
+    CHECK(truck.rig.mass() == 20000.0f && w->rules().tip_rate == 3.0f);
+    for (int i = 0; i < 50; ++i) w->tick();
+    CHECK(truck.rig.x() > x);
+}
+
 void exhaust_brake_holds_a_descent() {
     auto speed_after_descent = [](bool exhaust_brake) {
         Terrain t(2400, 48, 0.25f);
@@ -953,6 +1014,9 @@ int main() {
     dozer_reverses_as_fast_as_it_goes_forward();
     clutch_pedal_works_in_automatic();
     a_touch_of_throttle_moves_the_truck();
+    shipped_tuning_loads_cleanly();
+    tuning_overrides_and_refuses();
+    retuning_keeps_the_world_running();
     payload_loads_the_rear_bogie();
     handbrake_holds_on_a_slope();
     sequential_reverse();

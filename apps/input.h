@@ -81,13 +81,14 @@ private:
 struct Map {
     std::array<Binding, kFnCount> b;
 
-    float axis(int fn, const Devices& d) const {  // 0 released .. 1 fully applied
+    // 0 released .. 1 fully applied, straight from the axis; the game shapes it with each pedal's curve.
+    float axis(int fn, const Devices& d) const {
         const Binding& x = b[fn];
         if (x.kind != Binding::Axis || x.full == x.rest) return 0.0f;
         SDL_Joystick* j = d.find(x.device);
         if (!j || x.index >= SDL_JoystickNumAxes(j)) return 0.0f;
         const float t = static_cast<float>(SDL_JoystickGetAxis(j, x.index) - x.rest) / static_cast<float>(x.full - x.rest);
-        return std::clamp((t - 0.04f) / 0.92f, 0.0f, 1.0f);  // small dead band at both ends
+        return std::clamp(t, 0.0f, 1.0f);
     }
     // Pressed: a bound button held, or a bound axis past halfway (an axis can stand in for any button). Not for
     // the pedals: their axis is read as an axis, and treating it as a button too snapped it to full past halfway.

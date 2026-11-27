@@ -12,8 +12,9 @@ cmake --build build -j8
 ctest --test-dir build --output-on-failure
 ```
 
-Needs CMake 3.20+ and a C++20 compiler (built here with GCC 13). The core, the demo and the tests have no
-third-party dependencies. The playable prototype needs SDL2 2.0.18 or newer (`libsdl2-dev`, `brew install sdl2`,
+Needs CMake 3.20+, a C++20 compiler and the Boost headers, 1.75 or newer (`libboost_headers-devel`,
+`libboost-dev`, `brew install boost`, or vcpkg): the core reads its tuning file with Boost.JSON, used header-only,
+so no Boost library is linked. The playable prototype needs SDL2 2.0.18 or newer (`libsdl2-dev`, `brew install sdl2`,
 or vcpkg); without it CMake skips that one target.
 
 ## Play
@@ -45,10 +46,22 @@ grade it with the dozer, pave it, and drive the stock truck across.
 | F1 | Sound on / off |
 | F3 | Controller setup |
 | F5 / Esc | Reset the world / quit |
+| F6 | Reload `data/tuning.json` into the running game |
 | F11 | Fullscreen on / off. The window can also be resized or maximised; `./build/play --fullscreen` starts fullscreen |
 
 The pedal bars in the HUD show what the actuators are doing, so in automatic and sequential modes you can
 watch the clutch being worked for you.
+
+### Tuning
+
+Every number worth tuning is in **`data/tuning.json`**, with comments and units: the mud, the surfaces, the
+tyres' and tracks' grip, each vehicle (mass, brakes, engine torque curve, idle governor, clutch, gear ratios,
+wheel layout and load shares), how the automated gearboxes shift and pull away, the site rules (tipping, blade,
+gravel), and how pedals respond (dead zone and curve per pedal, keyboard ramp speeds). Edit it and press **F6**:
+the running world takes the new values and every vehicle stays where it is. Anything left out keeps its built-in
+value, an unknown key is reported in the terminal as a probable typo, and a broken file (with its line and column)
+leaves the old values in place. The game looks for `data/tuning.json` from where it is started, then in the source
+tree; `--tuning FILE` uses another. `loop_demo` and the tests always use the built-in values.
 
 ### The dozer
 
@@ -155,6 +168,8 @@ All soil, tyre and vehicle numbers are placeholders chosen to be plausible. Noth
 | `core/include/inc/drivetrain.h` | Engine, clutch, gearbox, and a differential tree solved exactly for any layout |
 | `core/include/inc/transmission.h` | Shift controller: manual, sequential, automatic |
 | `core/include/inc/rig.h` | Straight-line test rig |
+| `core/include/inc/tuning.h` | Tuning: built-in values and the loader for `data/tuning.json` (Boost.JSON) |
+| `data/tuning.json` | The tuning file |
 | `core/include/inc/world.h` | The world: site, vehicles and tools, players, commands, ticks (50 Hz) and events |
 | `core/include/inc/presets.h` | Placeholder truck, dozer, tyres and test course |
 | `apps/play.cpp` | The playable prototype (SDL2) |

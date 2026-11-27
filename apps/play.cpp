@@ -53,7 +53,8 @@ struct Look {
 // One player in a world, plus what only this screen needs. The world holds every rule; this turns keys into
 // commands and controls, events into messages, and ticks the world as real time passes.
 struct Game {
-    std::unique_ptr<World> world = make_playground();
+    Tuning tuning;
+    std::unique_ptr<World> world;
     PlayerId me = 0;
     std::vector<Look> looks;
     std::string message = "DRIVE TO THE TOWN. TAB SWITCHES VEHICLE.";
@@ -63,7 +64,7 @@ struct Game {
     float alpha = 0.0f;      // how far the picture is between the last two ticks, 0..1
     std::string last_trip;
 
-    Game() {
+    explicit Game(Tuning t = Tuning::defaults()) : tuning(std::move(t)), world(make_playground(tuning)) {
         me = world->join();
         const Rgb paints[] = {{222, 172, 44}, {200, 84, 52}, {236, 196, 36}};
         for (std::size_t i = 0; i < world->machines().size(); ++i) {
@@ -168,9 +169,10 @@ void update(Game& g, const Held& h, float frame_dt) {
     auto ramp = [&](float& pedal, bool on, float up, float down) {
         pedal = std::clamp(pedal + (on ? up : -down) * frame_dt, 0.0f, 1.0f);
     };
-    ramp(g.key_throttle, h.throttle, 3.0f, 6.0f);
-    ramp(g.key_brake, h.brake, 6.0f, 8.0f);
-    ramp(g.key_clutch, h.clutch, 10.0f, 1.6f);  // stamps down fast, comes up slowly so a key can feather it
+    const Pedals& pd = g.tuning.pedals;
+    ramp(g.key_throttle, h.throttle, pd.key_throttle_up, pd.key_throttle_down);
+    ramp(g.key_brake, h.brake, pd.key_brake_up, pd.key_brake_down);
+    ramp(g.key_clutch, h.clutch, pd.key_clutch_down, pd.key_clutch_up);  // stamps down fast, comes up slowly to feather it
     PlayerControls c;
     c.throttle = std::max(g.key_throttle, h.throttle_axis);
     c.brake = std::max(g.key_brake, h.brake_axis);
@@ -222,9 +224,14 @@ void poll_pad(Pad& pad, Game& g, Held& h) {
         {input::NextVehicle, Command::NextVehicle}, {input::Cargo, Command::Cargo}, {input::Pave, Command::Pave}, {input::Roll, Command::Roll},
         {input::Recover, Command::Recover}};
     const input::Map& m = pad.map;
-    h.throttle_axis = m.axis(input::Throttle, pad.devices);
-    h.brake_axis = m.axis(input::Brake, pad.devices);
-    h.clutch_axis = m.axis(input::Clutch, pad.devices);
+    // Pedal travel through each pedal's curve (data/tuning.json): a dead zone at both ends, then travel ^ gamma.
+    auto shaped = [&](int fn, const PedalCurve& c) {
+        const float t = std::clamp((m.axis(fn, pad.devices) - c.deadzone) / (1.0f - 2.0f * c.deadzone), 0.0f, 1.0f);
+        return std::pow(t, c.gamma);
+    };
+    h.throttle_axis = shaped(input::Throttle, g.tuning.pedals.throttle);
+    h.brake_axis = shaped(input::Brake, g.tuning.pedals.brake);
+    h.clutch_axis = shaped(input::Clutch, g.tuning.pedals.clutch);
     h.throttle |= m.button(input::Throttle, pad.devices);
     h.brake |= m.button(input::Brake, pad.devices);
     h.clutch |= m.button(input::Clutch, pad.devices);
@@ -392,7 +399,8 @@ void draw_vehicle(const Painter& p, const Game& g, int index, View view, bool ac
         draw_wheel(p, rear.x, rear.y, r * kScale, look.wheel_angle[0]);
         draw_wheel(p, front.x, front.y, r * kScale, look.wheel_angle[0]);
         // The blade hangs at its cutting edge when down (where the ground model cuts), lifted clear when up.
-        const float bx = x + kBladeAhead, bz = v.blade ? v.blade_edge : pose.z + std::tan(pose.pitch) * kBladeAhead + 0.5f;
+        const float ahead = g.world->rules().blade_ahead;
+        const float bx = x + ahead, bz = v.blade ? v.blade_edge : pose.z + std::tan(pose.pitch) * ahead + 0.5f;
         p.rect(view.sx(bx - 0.09f), view.sy(bz + 1.1f), 0.18f * kScale, 1.1f * kScale, kSteel);
         const SDL_FPoint arm = at(half, 0.7f);
         p.line(arm.x, arm.y, view.sx(bx), view.sy(bz + 0.5f), kSteel);
@@ -446,7 +454,7 @@ void draw_vehicle(const Painter& p, const Game& g, int index, View view, bool ac
 
     // Where the load lands: a marker over the spot while there is gravel in the bed, and the stream while tipping.
     if (active && v.gravel > 0.0f) {
-        const float lx = x + kTipAhead, lz = ground(lx);
+        const float lx = x + g.world->rules().tip_ahead, lz = ground(lx);
         const Rgb c = x < g.world->quarry_end() ? kDim : kAmber;  // no tipping in the quarry
         if (v.tipping) p.rect(view.sx(lx - 0.25f), view.sy(lz + 2.4f), 0.5f * kScale, 2.4f * kScale, kGravel);
         const SDL_FPoint arrow[3] = {{view.sx(lx - 0.35f), view.sy(lz + 3.2f)}, {view.sx(lx + 0.35f), view.sy(lz + 3.2f)},
@@ -607,7 +615,8 @@ void draw_map(const Painter& p, const Game& g, const Minimap& map, View view) {
         p.rect(vx - 20, vy - 8, 36, 16, g.looks[static_cast<std::size_t>(i)].paint);
         if (i == g.active()) p.frame(vx - 22, vy - 10, 40, 20, kText);
         if (i == g.active() && v.gravel > 0.0f)  // where a tipped load will land
-            p.rect(mx + (x + kTipAhead) * per_m - 3.0f, my + (g.world->course().lane_y - 0.5f * kTipWidth) * per_m, 6, kTipWidth * per_m, kAmber);
+            p.rect(mx + (x + g.world->rules().tip_ahead) * per_m - 3.0f, my + (g.world->course().lane_y - 0.5f * g.world->rules().tip_width) * per_m, 6,
+                   g.world->rules().tip_width * per_m, kAmber);
     }
     p.frame(mx + (view.cam_x - 11.0f) * per_m, my - 2, 32.0f * per_m, mh + 4, kText);
     p.centred(mx + 30.0f * per_m, my + mh + 4, 1, kDim, "QUARRY");
@@ -616,7 +625,7 @@ void draw_map(const Painter& p, const Game& g, const Minimap& map, View view) {
     p.text(40, 694, 1, kDim,
            "DOTTED LINE: GROUND BETWEEN THE WHEELS   W/S THROTTLE BRAKE (SS HANDBRAKE)   SHIFT CLUTCH   1-6 N R GEARS   Q/E SHIFT DOWN/UP   M GEARBOX MODE   I STARTER   B ENGINE BRAKE   F3 CONTROLLER SETUP");
     p.text(40, 706, 1, kDim,
-           "T AWD   Y DIFF LOCK   L LOW RANGE   TAB VEHICLE   G LOAD / HOLD TO TIP (DOZER: BLADE, Z/X LAYER)   P PAVE   O ROLL   BACKSPACE RECOVER   F5 RESET   F1 SOUND   F11 FULLSCREEN");
+           "T AWD   Y DIFF LOCK   L LOW RANGE   TAB VEHICLE   G LOAD / HOLD TO TIP (DOZER: BLADE, Z/X LAYER)   P PAVE   O ROLL   BACKSPACE RECOVER   F5 RESET   F6 RELOAD TUNING   F1 SOUND   F11 FULLSCREEN");
 }
 
 // The controller setup screen: every function with what it is bound to.
@@ -784,7 +793,7 @@ std::string telemetry_json(const Game& g, std::uint32_t terrain_version) {
         j.close(']');
         j.key("blade");
         if (m.has_blade) {
-            j.open('{'), j.flag("down", m.blade), j.field("edge", m.blade_edge), j.field("x", g.shown_x(i) + kBladeAhead), j.close('}');
+            j.open('{'), j.flag("down", m.blade), j.field("edge", m.blade_edge), j.field("x", g.shown_x(i) + g.world->rules().blade_ahead), j.close('}');
         } else {
             j.sep(), j.s += "null";
         }
@@ -848,7 +857,7 @@ std::string telemetry_json(const Game& g, std::uint32_t terrain_version) {
     if (v.has_blade) {
         j.open('{');
         j.flag("down", v.blade), j.field("layer", v.blade_layer), j.field("edge", v.blade_edge);
-        j.field("pile", v.blade_pile), j.field("force", v.blade_force), j.field("x", rig.x() + kBladeAhead);
+        j.field("pile", v.blade_pile), j.field("force", v.blade_force), j.field("x", rig.x() + g.world->rules().blade_ahead);
         j.close('}');
     } else {
         j.sep(), j.s += "null";
@@ -914,7 +923,34 @@ void audio_callback(void* user, Uint8* stream, int len) {
     a->synth.render(reinterpret_cast<float*>(stream), len / static_cast<int>(sizeof(float)), a->muted ? SoundState{} : a->state);
 }
 
-int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
+// The tuning file: --tuning PATH, or data/tuning.json found from where the game was started, or in the source tree.
+std::string find_tuning(const std::string& given) {
+    if (!given.empty()) return given;
+    for (const std::string& p : {std::string("data/tuning.json"), std::string("../data/tuning.json"), std::string(INC_DATA_DIR "/tuning.json")})
+        if (std::FILE* f = std::fopen(p.c_str(), "r")) {
+            std::fclose(f);
+            return p;
+        }
+    return "";
+}
+
+// Loads the tuning over the built-in values. Problems go to the terminal in full and to the HUD in short.
+bool read_tuning(const std::string& path, Tuning& out, std::string& summary) {
+    Tuning fresh = Tuning::defaults();
+    const TuningResult r = load_tuning(path, fresh);
+    if (!r.ok) {
+        std::fprintf(stderr, "tuning: %s\n", r.error.c_str());
+        summary = "TUNING NOT LOADED: " + r.error.substr(r.error.find_last_of('/') + 1);
+        if (summary.size() > 66) summary = summary.substr(0, 63) + "...";
+        return false;
+    }
+    for (const std::string& w : r.warnings) std::fprintf(stderr, "tuning: %s: %s\n", path.c_str(), w.c_str());
+    out = std::move(fresh);
+    summary = r.warnings.empty() ? "TUNING LOADED" : "TUNING LOADED, " + std::to_string(r.warnings.size()) + " WARNINGS (SEE TERMINAL)";
+    return true;
+}
+
+int play(int telemetry_port, bool telemetry_lan, bool fullscreen, const std::string& tuning_arg) {
     // Keep reading pedals and wheels while another window has focus: the telemetry and 3D views on a second
     // screen. SDL ignores controllers in the background by default.
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -957,7 +993,15 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
     pad.devices.refresh();
     pad.map.load(kBindingsFile);
 
-    auto game = std::make_unique<Game>();
+    const std::string tuning_path = find_tuning(tuning_arg);
+    Tuning tuning = Tuning::defaults();
+    std::string tuning_summary = "NO TUNING FILE: BUILT-IN VALUES";
+    if (!tuning_path.empty()) {
+        read_tuning(tuning_path, tuning, tuning_summary);
+        std::printf("tuning: %s (F6 reloads it)\n", tuning_path.c_str());
+    }
+    auto game = std::make_unique<Game>(tuning);
+    game->say(tuning_summary);
     Minimap map;
     map.rebuild(renderer, game->world->terrain());
 
@@ -1033,8 +1077,15 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
                 audio.muted = !audio.muted;
                 game->say(audio.muted ? "SOUND OFF" : "SOUND ON");
             } else if (key == SDLK_F5) {
-                game = std::make_unique<Game>();
+                game = std::make_unique<Game>(tuning);
                 map.rebuild(renderer, game->world->terrain());
+            } else if (key == SDLK_F6) {  // reload the tuning into the running game
+                std::string summary = "NO TUNING FILE";
+                if (!tuning_path.empty() && read_tuning(tuning_path, tuning, summary)) {
+                    game->tuning = tuning;
+                    game->world->retune(tuning);
+                }
+                game->say(summary);
             } else if (key_action(key, a) && (!ev.key.repeat || a == Command::Pave || a == Command::Roll)) {
                 send(*game, a);
             }
@@ -1349,7 +1400,7 @@ int selftest(const std::string& prefix) {
     run(gas, 14.0f);
     shot("offroad truck, later");
     // 4. Gravel: five loads tipped along the mud, then the dozer grades towards them.
-    for (int i = 0; i < 5; ++i) g.world->terrain().dump_gravel(64.0f + 8.0f * i, g.world->course().lane_y, kLoad);
+    for (int i = 0; i < 5; ++i) g.world->terrain().dump_gravel(64.0f + 8.0f * i, g.world->course().lane_y, g.world->rules().load);
     send(g, Command::NextVehicle);
     send(g, Command::Cargo);
     send(g, Command::Gear1);
@@ -1357,7 +1408,7 @@ int selftest(const std::string& prefix) {
     shot("dozer grading, piles ahead");
     run(gas, 30.0f);
     // 5. Pave and roll the first half, then send the stock truck across.
-    g.world->terrain().pave({58.0f, 3.5f, 80.0f, 8.5f}, kMinBase);
+    g.world->terrain().pave({58.0f, 3.5f, 80.0f, 8.5f}, g.world->rules().min_base);
     g.world->terrain().roll({58.0f, 3.5f, 80.0f, 8.5f});
     send(g, Command::NextVehicle);
     send(g, Command::Recover);
@@ -1383,16 +1434,18 @@ int main(int argc, char** argv) {
     if (argc == 3 && std::string(argv[1]) == "--selftest") return selftest(argv[2]);
     int port = 8787;
     bool lan = false, fullscreen = false;
+    std::string tuning;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--telemetry-port" && i + 1 < argc) port = std::atoi(argv[++i]);
         else if (arg == "--telemetry-lan") lan = true;  // let a tablet or another computer open the dashboard
         else if (arg == "--no-telemetry") port = -1;
         else if (arg == "--fullscreen") fullscreen = true;
+        else if (arg == "--tuning" && i + 1 < argc) tuning = argv[++i];
         else {
-            std::fprintf(stderr, "usage: play [--fullscreen] [--telemetry-port N] [--telemetry-lan] [--no-telemetry] | --selftest PREFIX\n");
+            std::fprintf(stderr, "usage: play [--fullscreen] [--tuning FILE] [--telemetry-port N] [--telemetry-lan] [--no-telemetry] | --selftest PREFIX\n");
             return 2;
         }
     }
-    return play(port, lan, fullscreen);
+    return play(port, lan, fullscreen, tuning);
 }

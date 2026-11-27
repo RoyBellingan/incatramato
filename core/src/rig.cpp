@@ -327,6 +327,16 @@ Pose Rig::pose(float x) const {
     return p;
 }
 
+void Rig::retune(VehicleSpec spec, SoilParams soil) {
+    spec_ = std::move(spec);
+    soil_ = soil;
+    track_y_.clear();
+    for (const WheelSpec& w : spec_.wheels)
+        if (std::find(track_y_.begin(), track_y_.end(), w.y) == track_y_.end()) track_y_.push_back(w.y);
+    const int top = static_cast<int>(spec_.gearbox.forward.size()), bottom = -static_cast<int>(spec_.gearbox.reverse.size());
+    gear_ = std::clamp(gear_, bottom, top);  // fewer gears than before: stay in the highest there is
+}
+
 float Rig::engine_rpm() const { return engine_omega_ * kRadToRpm; }
 
 float Rig::input_rpm(int gear) const { return shaft_ * spec_.gearbox.ratio(gear, low_) * kRadToRpm; }

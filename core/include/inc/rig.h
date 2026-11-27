@@ -93,6 +93,9 @@ public:
     Rig(VehicleSpec spec, Terrain& terrain, SoilParams soil, float x, float y);
 
     void step(const Controls& u, float dt);
+    // New numbers for the same vehicle (a tuning reload): where it is and what it is doing are kept. The wheel
+    // count must not change.
+    void retune(VehicleSpec spec, SoilParams soil);
     // A passive force against the motion from something the vehicle drags or pushes (a blade, a sledge).
     void set_external_resistance(float newtons) { external_ = newtons; }
     // Cargo carried [kg]: adds to the weight on the wheels (by payload_fraction) and to the mass to accelerate.

@@ -8,14 +8,8 @@ namespace {
 
 float modulus(const SoilParams& s, float width) { return s.k_c / width + s.k_phi; }
 
-// Placeholder rolling resistance coefficients for hard surfaces (grip is per tyre, see Grip).
-constexpr float kCrrFirm = 0.035f, kCrrGravel = 0.025f, kCrrLaid = 0.020f, kCrrRolled = 0.008f;
-constexpr float kLaidGrip = 0.8f;  // fresh asphalt, not yet rolled, grips this much of rolled asphalt
-constexpr float kHardSlipGain = 12.0f;
-constexpr float kGravelFullCover = 0.15f;  // gravel thickness at which the wheel no longer touches mud [m]
-
-Contact hard_contact(float mu, float crr, const Tyre& t, float load, bool diggable) {
-    return {mu * load, kHardSlipGain, crr * t.crr_scale * load, 0.0f, diggable};
+Contact hard_contact(float mu, float crr, const SoilParams& s, const Tyre& t, float load, bool diggable) {
+    return {mu * load, s.hard_slip_gain, crr * t.crr_scale * load, 0.0f, diggable};
 }
 
 }  // namespace
@@ -38,19 +32,19 @@ float compaction_resistance(const Cell& ahead, const SoilParams& s, const Tyre& 
 Contact contact(const Cell& c, const SoilParams& s, const Tyre& t, float load) {
     if (c.paving != Paving::None) {  // asphalt, perhaps with loose gravel lying on it
         const bool rolled = c.paving == Paving::Rolled;
-        const Contact road = hard_contact(t.grip.asphalt * (rolled ? 1.0f : kLaidGrip), rolled ? kCrrRolled : kCrrLaid, t, load, false);
-        const float cover = std::clamp(c.loose / kGravelFullCover, 0.0f, 1.0f);
+        const Contact road = hard_contact(t.grip.asphalt * (rolled ? 1.0f : s.laid_grip), rolled ? s.crr_rolled : s.crr_laid, s, t, load, false);
+        const float cover = std::clamp(c.loose / s.gravel_full_cover, 0.0f, 1.0f);
         if (cover <= 0.0f) return road;
-        const Contact top = hard_contact(t.grip.gravel, kCrrGravel, t, load, true);
+        const Contact top = hard_contact(t.grip.gravel, s.crr_gravel, s, t, load, true);
         return {std::lerp(road.max_traction, top.max_traction, cover), std::lerp(road.slip_gain, top.slip_gain, cover),
                 std::lerp(road.rolling, top.rolling, cover), 0.0f, true};
     }
 
     Contact base;
     if (c.soft <= 0.0f) {
-        base = hard_contact(t.grip.firm, kCrrFirm, t, load, true);
+        base = hard_contact(t.grip.firm, s.crr_firm, s, t, load, true);
     } else if (c.soft - c.rut < 0.01f) {
-        base = hard_contact(t.grip.wet, kCrrFirm, t, load, true);
+        base = hard_contact(t.grip.wet, s.crr_firm, s, t, load, true);
         base.rolling += s.rut_drag * c.rut * load;
         base.softness = 1.0f;
     } else {
@@ -61,9 +55,9 @@ Contact contact(const Cell& c, const SoilParams& s, const Tyre& t, float load) {
         base.softness = 1.0f;
         base.diggable = true;
     }
-    const float cover = std::clamp(c.gravel / kGravelFullCover, 0.0f, 1.0f);
+    const float cover = std::clamp(c.gravel / s.gravel_full_cover, 0.0f, 1.0f);
     if (cover <= 0.0f) return base;
-    const Contact top = hard_contact(t.grip.gravel, kCrrGravel, t, load, true);
+    const Contact top = hard_contact(t.grip.gravel, s.crr_gravel, s, t, load, true);
     return {std::lerp(base.max_traction, top.max_traction, cover), std::lerp(base.slip_gain, top.slip_gain, cover),
             std::lerp(base.rolling, top.rolling, cover), std::lerp(base.softness, top.softness, cover), true};
 }
