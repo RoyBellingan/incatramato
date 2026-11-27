@@ -38,7 +38,7 @@ grade it with the dozer, pave it, and drive the stock truck across.
 | B | Engine brake |
 | I (hold) | Starter, after a stall |
 | Tab | Next vehicle |
-| G | Truck: load at the quarry; elsewhere hold to tip (1.5 m3/s over the 2.2 m tailgate, let go to stop; tip on the move to spread a line). A marker shows where it lands; not within 3 m of another vehicle. Dozer: blade down / up |
+| G | Truck: load at the quarry; elsewhere hold to tip (1.5 m3/s over the 2.2 m tailgate, let go to stop; tip on the move to spread a line). A marker shows where it lands; not within 3 m of another vehicle. Dozer: blade down / up (it lifts by itself when you reverse) |
 | Z / X | Dozer: blade lower / higher, 5 cm a step (from 50 cm below to 50 cm above the original ground). Below ground it also rips up asphalt |
 | P / O | Lay asphalt under the vehicle (needs 15 cm of graded gravel) / roll it |
 | Backspace | Recover the vehicle to the quarry |

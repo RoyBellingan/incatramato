@@ -117,7 +117,7 @@ std::string event_text(const Event& e, const World& w) {
         case K::Seated: return w.machine(e.vehicle).label;
         case K::NoFreeVehicle: return "EVERY OTHER VEHICLE HAS A DRIVER";
         case K::Blade:
-            if (!e.on) return "BLADE UP";
+            if (!e.on) return e.value2 > 0.5f ? "BLADE UP FOR REVERSING (G TO LOWER)" : "BLADE UP";
             std::snprintf(buf, sizeof buf, "BLADE DOWN: SPREADING %.0f CM (Z/X THINNER/THICKER)", e.value * 100.0f);
             return buf;
         case K::BladeLayer:

@@ -244,6 +244,13 @@ void World::tick_machine(Machine& m) {
         m.settle_left -= kTickDt;
     }
 
+    // Reversing with the blade down only drags the heap back over the work: lift it as soon as reverse is chosen
+    // or the dozer rolls backwards. It stays up until the driver lowers it again.
+    if (m.has_blade && m.blade && (m.box.selected() < 0 || m.rig.gear() < 0 || m.rig.speed() < -0.3f)) {
+        m.blade = false;
+        say(m.driver, vi, Event::Kind::Blade, m.blade_layer, 1.0f, false);
+    }
+
     // The blade.
     if (m.has_blade) {
         m.blade_pile = 0.0f;

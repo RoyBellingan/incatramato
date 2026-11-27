@@ -667,6 +667,27 @@ void dozer_does_not_climb_its_own_heap() {
     CHECK(worst < 0.2f + 0.08f);
 }
 
+// Choosing reverse lifts the dozer's blade, once, and it stays up going forward again.
+void dozer_lifts_its_blade_to_reverse() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    w->command(me, Command::NextVehicle);
+    w->command(me, Command::NextVehicle);
+    Machine& dozer = w->machine(w->vehicle_of(me));
+    w->command(me, Command::Cargo);
+    CHECK(dozer.blade);
+    w->take_events();
+    w->command(me, Command::Reverse);
+    for (int i = 0; i < 50; ++i) w->tick();
+    CHECK(!dozer.blade);
+    int lifted = 0;
+    for (const Event& e : w->take_events()) lifted += e.kind == Event::Kind::Blade && !e.on && e.value2 > 0.5f;
+    CHECK(lifted == 1);
+    w->command(me, Command::Gear1);
+    for (int i = 0; i < 50; ++i) w->tick();
+    CHECK(!dozer.blade);
+}
+
 // A load tipped standing still pours over the whole tailgate: a heap wider and lower than a cone from one point.
 void tipping_pours_across_the_tailgate() {
     auto w = make_playground();
@@ -868,6 +889,7 @@ int main() {
     a_heap_between_the_wheels_is_ploughed();
     tipping_pours_across_the_tailgate();
     dozer_does_not_climb_its_own_heap();
+    dozer_lifts_its_blade_to_reverse();
     vehicles_sit_on_the_ground();
     exhaust_brake_holds_a_descent();
     std::printf(failures ? "%d check(s) failed\n" : "all checks passed\n", failures);

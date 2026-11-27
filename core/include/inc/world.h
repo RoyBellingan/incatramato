@@ -55,7 +55,7 @@ struct Event {
         Awd, DiffLock, LowRange, EngineBrake, Handbrake,  // on
         Seated,         // the player now drives `vehicle`
         NoFreeVehicle,  // every other vehicle has a driver
-        Blade,          // on: down; value: layer [m]
+        Blade,          // on: down; value: layer [m]; value2: 1 when it rose by itself for reversing
         BladeLayer,     // value: layer [m]
         Loaded,         // value: m3
         HoldToTip,      // Cargo pressed away from the quarry with gravel in the bed
