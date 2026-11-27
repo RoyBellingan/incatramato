@@ -89,10 +89,11 @@ struct Map {
         const float t = static_cast<float>(SDL_JoystickGetAxis(j, x.index) - x.rest) / static_cast<float>(x.full - x.rest);
         return std::clamp((t - 0.04f) / 0.92f, 0.0f, 1.0f);  // small dead band at both ends
     }
-    // Pressed: a bound button held, or a bound axis past halfway (an axis can stand in for any button).
+    // Pressed: a bound button held, or a bound axis past halfway (an axis can stand in for any button). Not for
+    // the pedals: their axis is read as an axis, and treating it as a button too snapped it to full past halfway.
     bool button(int fn, const Devices& d) const {
         const Binding& x = b[fn];
-        if (x.kind == Binding::Axis) return axis(fn, d) > 0.5f;
+        if (x.kind == Binding::Axis) return !is_pedal(fn) && axis(fn, d) > 0.5f;
         if (x.kind != Binding::Button) return false;
         SDL_Joystick* j = d.find(x.device);
         return j && x.index < SDL_JoystickNumButtons(j) && SDL_JoystickGetButton(j, x.index);

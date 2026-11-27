@@ -1238,6 +1238,13 @@ int controller_test(SDL_Renderer* renderer, SDL_Surface* surface, Game& g, Minim
 
     axis(0, 0);
     check(std::abs(pad.map.axis(input::Throttle, pad.devices) - 0.5f) < 0.03f, "throttle pedal at half travel reads 0.5");
+    axis(0, -32768 + static_cast<int>(0.7 * 65535));  // a pedal past halfway is still read as an axis, not as a button
+    {
+        Held h;
+        poll_pad(pad, g, h);
+        check(!h.throttle && std::abs(h.throttle_axis - 0.7f) < 0.04f, "throttle at 70% gives 70%, not full");
+    }
+    axis(0, 0);
     axis(2, -16384);
     check(std::abs(pad.map.axis(input::Brake, pad.devices) - 0.5f) < 0.03f, "stick pulled half back reads 0.5 brake");
     axis(2, 20000);
