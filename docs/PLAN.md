@@ -75,7 +75,8 @@ once M1 is done.
 
 - Ground as a grid of columns: firm base, soft layer, gravel, rut depth, paving state, loose gravel on asphalt.
 - Wheels and tracks sink according to ground pressure; gravel spreads the load; ruts persist.
-- Traction and compaction resistance from the standard terramechanics formulas; slipping wheels dig.
+- Traction and compaction resistance from the standard terramechanics formulas; slipping wheels dig into mud
+  and throw gravel behind them (none is lost).
 - Grip per tyre type and surface: tracks grip far better than tyres on earth and in mud, far worse on asphalt.
 - Engine with inertia, idle governor, stall, starter, engine braking and exhaust brake.
 - Friction clutch that holds or slips; gears that grind unless the clutch is down or the revs match.

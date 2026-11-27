@@ -68,7 +68,9 @@ public:
 
     // Traffic. width is the extent across the direction of travel (y), length along it (x).
     void press(float x, float y, float width, float length, float depth);
-    void dig(float x, float y, float width, float length, float amount);
+    // A slipping wheel: loose gravel under it is thrown just beyond the patch, towards throw_dir along x (behind a
+    // spinning wheel, ahead of a skidding one), so none is lost; with no gravel left, it digs the rut deeper.
+    void dig(float x, float y, float width, float length, float amount, float throw_dir = -1.0f);
 
     // Road building. All of them conserve material.
     void dump_gravel(float x, float y, float volume);  // drops a conical pile; on asphalt it lies on top

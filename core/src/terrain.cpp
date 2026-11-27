@@ -51,14 +51,17 @@ void Terrain::press(float x, float y, float width, float length, float depth) {
         }
 }
 
-void Terrain::dig(float x, float y, float width, float length, float amount) {
+void Terrain::dig(float x, float y, float width, float length, float amount, float throw_dir) {
     if (amount <= 0.0f) return;
     const Span s = span({x - 0.5f * length, y - 0.5f * width, x + 0.5f * length, y + 0.5f * width});
+    double thrown = 0.0;  // gravel thickness summed over the cells it came from
     for (int iy = s.y0; iy <= s.y1; ++iy)
         for (int ix = s.x0; ix <= s.x1; ++ix) {
             Cell& c = cells_[index(ix, iy)];
             if (c.movable() > 0.0f) {
-                c.movable() = std::max(0.0f, c.movable() - amount);  // spinning wheels throw the aggregate away
+                const float take = std::min(c.movable(), amount);
+                c.movable() -= take;
+                thrown += take;
             } else if (c.paving != Paving::None) {
                 continue;
             } else if (c.rut < c.soft) {
@@ -66,6 +69,17 @@ void Terrain::dig(float x, float y, float width, float length, float amount) {
             } else {
                 continue;
             }
+            mark(index(ix, iy));
+        }
+    if (thrown <= 0.0) return;
+    // Where it lands: the row of cells just beyond the end of the patch, across its width.
+    const float edge = x + (throw_dir < 0.0f ? -1.0f : 1.0f) * (0.5f * length + 0.5f * cs_);
+    const Span land = span({edge, y - 0.5f * width, edge, y + 0.5f * width});
+    const auto cells = static_cast<double>((land.x1 - land.x0 + 1) * (land.y1 - land.y0 + 1));
+    const auto share = static_cast<float>(thrown / cells);  // same cell area on both sides: thickness carries over
+    for (int iy = land.y0; iy <= land.y1; ++iy)
+        for (int ix = land.x0; ix <= land.x1; ++ix) {
+            cells_[index(ix, iy)].movable() += share;
             mark(index(ix, iy));
         }
 }

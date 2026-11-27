@@ -194,7 +194,8 @@ void Rig::step(const Controls& u, float dt) {
         if (held > 0.0f && std::abs(next) < kBrakeBand) hold += std::min(fmax_[i], held * spec_.brake_torque / r);
         if (diggable_[i]) {
             const WheelSpec& w = spec_.wheels[i];
-            terrain_->dig(x_ + w.x, y_ + w.y, tyre.width, tyre.length, soil_.dig_rate * std::abs(next * r - v_) * dt);
+            const float slip = next * r - v_;  // spinning: throws gravel behind; skidding: pushes it ahead
+            terrain_->dig(x_ + w.x, y_ + w.y, tyre.width, tyre.length, soil_.dig_rate * std::abs(slip) * dt, slip > 0.0f ? -1.0f : 1.0f);
         }
     }
 

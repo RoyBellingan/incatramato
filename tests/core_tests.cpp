@@ -196,6 +196,21 @@ void blade_rips_up_a_road() {
     CHECK(ripped.at(20.0f, 7.5f).paving == Paving::Rolled);  // beyond the blade's ends the road is untouched
 }
 
+// A wheel spinning on gravel throws it behind; a skidding one pushes it ahead. Either way none is lost.
+void spinning_wheels_throw_gravel() {
+    Terrain t(80, 40, 0.25f);
+    Cell bed;
+    bed.gravel = 0.2f;
+    t.fill({8.0f, 3.0f, 12.0f, 7.0f}, bed);
+    const double before = t.gravel_volume();
+    t.dig(10.0f, 5.0f, 0.5f, 0.5f, 0.05f, -1.0f);
+    CHECK(near(t.gravel_volume(), before, 1e-5));
+    CHECK(t.at(10.0f, 5.0f).gravel < 0.2f - 0.04f);
+    CHECK(t.at(9.6f, 5.0f).gravel > 0.2f);  // the row just behind got it
+    t.dig(10.0f, 5.0f, 0.5f, 0.5f, 0.05f, 1.0f);
+    CHECK(t.at(10.4f, 5.0f).gravel > 0.2f && near(t.gravel_volume(), before, 1e-5));
+}
+
 void paving_needs_a_base() {
     Terrain t(40, 40, 0.25f);
     const Rect r{2, 2, 8, 8};
@@ -742,8 +757,8 @@ void tipping_pours_across_the_tailgate() {
     CHECK(w->terrain().at(land, y + 2.0f).gravel > 0.4f && w->terrain().at(land, y - 2.0f).gravel > 0.4f);
 }
 
-// A heap between the wheels does not hold a truck up: the chassis ploughs it ahead. Gravel is only lost where
-// the wheels spin climbing it, which throws a little away.
+// A heap between the wheels does not hold a truck up: the chassis ploughs it ahead, and the wheels spinning on
+// it throw gravel behind them: none is lost.
 void a_heap_between_the_wheels_is_ploughed() {
     auto w = make_playground();
     const PlayerId me = w->join();
@@ -757,7 +772,7 @@ void a_heap_between_the_wheels_is_ploughed() {
     w->controls(me, go);
     for (int i = 0; i < 50 * 15; ++i) w->tick();
     CHECK(truck.rig.x() > 40.0f);
-    CHECK(w->terrain().gravel_volume() > 0.9 * before && w->terrain().gravel_volume() < before + 0.01);
+    CHECK(near(w->terrain().gravel_volume(), before, 0.01));
     // The 1 m peak is cut to the chassis line: 40 cm clearance above the wheels, which ride on the heap's flanks.
     CHECK(w->terrain().at(30.0f, w->course().lane_y).surface() < 0.6f);
 }
@@ -995,6 +1010,7 @@ int main() {
     blade_cuts_gravel_not_mud();
     blade_works_at_any_heading();
     gravel_on_a_road_stays_on_top();
+    spinning_wheels_throw_gravel();
     blade_rips_up_a_road();
     paving_needs_a_base();
     ground_pressure_decides_sinkage();
