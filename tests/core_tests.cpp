@@ -683,6 +683,35 @@ void dozer_does_not_climb_its_own_heap() {
     CHECK(worst < 0.2f + 0.08f);
 }
 
+// The playground's dozer driven by `me`, standing at `start` on a 20 cm gravel layer from start - 10 to
+// start + 30 m, blade down in whatever mode the tuning gives it.
+Machine& dozer_on_a_layer(World& w, PlayerId me, float start) {
+    w.command(me, Command::NextVehicle);
+    w.command(me, Command::NextVehicle);
+    Machine& dozer = w.machine(w.vehicle_of(me));
+    const float y = w.course().lane_y;
+    Terrain& t = w.terrain();
+    for (int iy = 0; iy < t.ny(); ++iy)
+        for (int ix = 0; ix < t.nx(); ++ix) {
+            const float cx = (ix + 0.5f) * t.cell_size(), cy = (iy + 0.5f) * t.cell_size();
+            if (cx < start - 10.0f || cx > start + 30.0f || std::abs(cy - y) > 4.0f) continue;
+            Cell c = t.cell(ix, iy);
+            c.gravel = 0.20f;
+            t.fill({cx - 0.01f, cy - 0.01f, cx + 0.01f, cy + 0.01f}, c);
+        }
+    dozer.rig = Rig(dozer.rig.spec(), t, SoilParams{}, start, y);
+    w.command(me, Command::Cargo);  // blade down
+    return dozer;
+}
+
+void drive(World& w, PlayerId me, float seconds) {
+    w.command(me, Command::Gear1);
+    PlayerControls go;
+    go.throttle = 1.0f;
+    w.controls(me, go);
+    for (int i = 0, n = static_cast<int>(seconds * 50.0f); i < n; ++i) w.tick();
+}
+
 // The blade layer is grade control: the edge holds the set layer above the undisturbed ground under the tracks,
 // not above the gravel the dozer stands on. Standing on 20 cm of gravel with the layer at 5 cm, it cuts 15 cm
 // below its own tracks and leaves 5 cm behind; on mud, the ruts it presses in do not lower the edge.
@@ -690,36 +719,99 @@ void blade_layer_is_measured_from_the_ground() {
     for (const float start : {34.0f, 66.0f}) {  // firm ground, then the mud (60 to 100 m)
         auto w = make_playground();
         const PlayerId me = w->join();
-        w->command(me, Command::NextVehicle);
-        w->command(me, Command::NextVehicle);
-        Machine& dozer = w->machine(w->vehicle_of(me));
-        const float y = w->course().lane_y;
-        Terrain& t = w->terrain();
-        for (int iy = 0; iy < t.ny(); ++iy)
-            for (int ix = 0; ix < t.nx(); ++ix) {
-                const float cx = (ix + 0.5f) * t.cell_size(), cy = (iy + 0.5f) * t.cell_size();
-                if (cx < start - 10.0f || cx > start + 30.0f || std::abs(cy - y) > 4.0f) continue;
-                Cell c = t.cell(ix, iy);
-                c.gravel = 0.20f;
-                t.fill({cx - 0.01f, cy - 0.01f, cx + 0.01f, cy + 0.01f}, c);
-            }
-        dozer.rig = Rig(dozer.rig.spec(), t, SoilParams{}, start, y);
-        w->command(me, Command::Cargo);  // blade down
+        Machine& dozer = dozer_on_a_layer(*w, me, start);
+        CHECK(dozer.blade_mode == BladeMode::Grade);  // the shipped default
         for (int i = 0; i < 3; ++i) w->command(me, Command::BladeLower);
         CHECK(near(dozer.blade_layer, 0.05f, 1e-4));
-        w->command(me, Command::Gear1);
-        PlayerControls go;
-        go.throttle = 1.0f;
-        w->controls(me, go);
-        for (int i = 0; i < 50 * 8; ++i) w->tick();
+        w->tick();
+        CHECK(near(dozer.blade_from_ground, 0.05f, 1e-3));
+        CHECK(dozer.blade_from_tracks < -0.1f);  // still on the full layer, and the HUD can say so: under its tracks
+        drive(*w, me, 8.0f);
+        const float y = w->course().lane_y;
+        const Terrain& t = w->terrain();
         const Cell& ground = t.at(start + 2.0f, y);
         CHECK(near(dozer.blade_edge, ground.hard + ground.soft + 0.05f, 1e-3));
+        CHECK(near(dozer.blade_from_ground, 0.05f, 1e-3));
         CHECK(dozer.rig.x() > start + 6.0f);
         // The lane the blade has passed, short of the tracks: a track slipping in the mud throws gravel just behind
         // itself (Terrain::dig), which is not the blade's doing.
         for (float x = start + 3.0f; x < dozer.rig.x() - 3.0f; x += 0.5f)
             for (const float side : {-1.0f, 0.0f, 1.0f}) CHECK(near(t.at(x, y + side).gravel, 0.05f, 0.02f));
     }
+}
+
+// Without grade control the blade is fixed to the machine: set 5 cm above the tracks, a dozer standing on 20 cm
+// of gravel rides over the layer and scrapes nothing; the edge follows the track line wherever it goes.
+void manual_blade_is_set_against_the_tracks() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    Machine& dozer = dozer_on_a_layer(*w, me, 34.0f);
+    w->take_events();
+    w->command(me, Command::BladeMode);
+    CHECK(dozer.blade_mode == BladeMode::Manual);
+    w->command(me, Command::BladeRaise);
+    CHECK(near(dozer.blade_height, 0.05f, 1e-4));
+    CHECK(near(dozer.blade_layer, 0.20f, 1e-4));  // grade control keeps its own setting
+    int told = 0;
+    for (const Event& e : w->take_events())
+        told += (e.kind == Event::Kind::BladeMode && static_cast<BladeMode>(static_cast<int>(e.value)) == BladeMode::Manual) +
+                (e.kind == Event::Kind::BladeLayer && near(e.value, 0.05f, 1e-4) &&
+                 static_cast<BladeMode>(static_cast<int>(e.value2)) == BladeMode::Manual);
+    CHECK(told == 2);
+    const float y = w->course().lane_y;
+    const Terrain& t = w->terrain();
+    const double before = t.gravel_volume();
+    float worst = 0.0f;
+    w->command(me, Command::Gear1);
+    PlayerControls go;
+    go.throttle = 1.0f;
+    w->controls(me, go);
+    for (int i = 0; i < 50 * 8; ++i) {
+        w->tick();
+        const Pose pose = dozer.rig.pose(dozer.rig.x());
+        worst = std::max(worst, std::abs(dozer.blade_edge - (pose.z + std::tan(pose.pitch) * w->rules().blade_ahead + 0.05f)));
+    }
+    CHECK(worst < 1e-4f);
+    CHECK(near(dozer.blade_from_tracks, 0.05f, 1e-3));
+    CHECK(near(dozer.blade_from_ground, 0.25f, 0.02f));
+    CHECK(dozer.rig.x() > 40.0f);
+    CHECK(dozer.blade_pile < 0.01f);
+    CHECK(dozer.blade_force < 100.0f);
+    // The lane is untouched: between the tracks all the way, under them past the launch (a track spinning as it
+    // pulls away at full throttle throws a little gravel back, which is not the blade's doing).
+    for (float x = 36.0f; x < dozer.rig.x(); x += 0.5f) {
+        CHECK(near(t.at(x, y).gravel, 0.20f, 0.01f));
+        if (x > 40.0f)
+            for (const float side : {-1.0f, 1.0f}) CHECK(near(t.at(x, y + side).gravel, 0.20f, 0.01f));
+    }
+    CHECK(near(t.gravel_volume(), before, 1e-3));
+    w->command(me, Command::BladeMode);  // and back
+    CHECK(dozer.blade_mode == BladeMode::Grade);
+}
+
+// A manual blade set below the tracks cuts that far under them: 10 cm into the 20 cm layer it stands on.
+void manual_blade_below_the_tracks_cuts() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    Machine& dozer = dozer_on_a_layer(*w, me, 34.0f);
+    w->command(me, Command::BladeMode);
+    for (int i = 0; i < 2; ++i) w->command(me, Command::BladeLower);
+    CHECK(near(dozer.blade_height, -0.10f, 1e-4));
+    drive(*w, me, 1.0f);  // the first metre: the tracks are still on the full layer
+    CHECK(near(dozer.blade_from_ground, 0.10f, 0.02f));
+    CHECK(dozer.blade_pile > 0.1f);
+}
+
+// The tuning decides which mode a new machine starts in.
+void tuning_sets_the_blade_mode() {
+    Tuning tuning = Tuning::defaults();
+    CHECK(tuning.assists.blade_grade_control);
+    const TuningResult r = load_tuning_text(R"({ "assists": { "blade_grade_control": false } })", tuning);
+    CHECK(r.ok && r.warnings.empty());
+    CHECK(!tuning.assists.blade_grade_control);
+    auto w = make_playground(tuning);
+    for (int i = 0; i < 3; ++i) CHECK(!w->machine(i).has_blade || w->machine(i).blade_mode == BladeMode::Manual);
+    CHECK(!load_tuning_text(R"({ "assists": { "blade_grade_control": 1 } })", tuning).ok);  // a flag, not a number
 }
 
 // Choosing reverse lifts the dozer's blade, once, and it stays up going forward again.
@@ -1081,6 +1173,9 @@ int main() {
     tipping_pours_across_the_tailgate();
     dozer_does_not_climb_its_own_heap();
     blade_layer_is_measured_from_the_ground();
+    manual_blade_is_set_against_the_tracks();
+    manual_blade_below_the_tracks_cuts();
+    tuning_sets_the_blade_mode();
     dozer_lifts_its_blade_to_reverse();
     no_vertical_gravel_after_a_push();
     vehicles_sit_on_the_ground();

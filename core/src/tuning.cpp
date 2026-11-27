@@ -172,6 +172,11 @@ void read_rules(const json::value& v, Rules& x, std::vector<std::string>& w) {
     positive(x.blade_width, "rules.blade_width"), positive(x.tip_rate, "rules.tip_rate");
 }
 
+void read_assists(const json::value& v, Assists& a, std::vector<std::string>& w) {
+    Reader r(v, "assists", w);
+    r.flag("blade_grade_control", a.blade_grade_control);
+}
+
 void read_pedals(const json::value& v, Pedals& p, std::vector<std::string>& w) {
     Reader r(v, "pedals", w);
     for (auto [key, curve] : {std::pair<const char*, PedalCurve*>{"throttle", &p.throttle}, {"brake", &p.brake}, {"clutch", &p.clutch}})
@@ -243,6 +248,7 @@ TuningResult load_tuning_text(const std::string& text, Tuning& t, const std::str
         }
         if (const json::value* v = r.find("shifting")) read_shifting(*v, next.shift, result.warnings);
         if (const json::value* v = r.find("rules")) read_rules(*v, next.rules, result.warnings);
+        if (const json::value* v = r.find("assists")) read_assists(*v, next.assists, result.warnings);
         if (const json::value* v = r.find("pedals")) read_pedals(*v, next.pedals, result.warnings);
     } catch (const Bad& bad) {
         result.ok = false;

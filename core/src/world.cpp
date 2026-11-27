@@ -11,6 +11,9 @@ constexpr float kG = 9.81f;
 // Force to shove a heap of loose gravel [N].
 float push_force(const Rules& r, float pile_m3) { return r.push_friction * r.gravel_density * kG * pile_m3; }
 
+// What Z/X set in the blade's current mode [m].
+float blade_setting(const Machine& m) { return m.blade_mode == BladeMode::Grade ? m.blade_layer : m.blade_height; }
+
 // Extent of a vehicle along the lane: its footprints, and the blade in front if it has one.
 void extent(const Machine& m, const Rules& r, float& lo, float& hi) {
     const VehicleSpec& s = m.rig.spec();
@@ -32,6 +35,7 @@ int World::add_machine(std::string label, const std::string& vehicle, const std:
     machines_.push_back({std::move(label), vehicle, tyre, Rig(tuning_.spec(vehicle, tyre), course_.terrain, tuning_.soil, x, course_.lane_y),
                          x, capacity, has_blade});
     machines_.back().box.params = tuning_.shift;
+    machines_.back().blade_mode = tuning_.assists.blade_grade_control ? BladeMode::Grade : BladeMode::Manual;
     return static_cast<int>(machines_.size()) - 1;
 }
 
@@ -142,7 +146,7 @@ void World::command(PlayerId player, Command c) {
             if (v.has_blade) {
                 v.blade = !v.blade;
                 if (!v.blade) let_go(v);
-                say(player, vi, K::Blade, v.blade_layer, 0, v.blade);
+                say(player, vi, K::Blade, blade_setting(v), static_cast<float>(v.blade_mode), v.blade);
             } else if (v.capacity <= 0.0f) {
                 break;
             } else if (x < quarry_end_) {
@@ -156,12 +160,21 @@ void World::command(PlayerId player, Command c) {
             break;
         case Command::BladeLower:
         case Command::BladeRaise:
+        {
             if (!v.has_blade) break;
-            // Below zero the edge goes under the original ground level, to scrape gravel out of ruts and holes.
-            // The blade moves gravel only; digging the mud itself is not modelled yet.
-            v.blade_layer = std::clamp(std::round((v.blade_layer + (c == Command::BladeRaise ? 0.05f : -0.05f)) * 20.0f) / 20.0f,
-                                       -0.5f, 0.5f);
-            say(player, vi, K::BladeLayer, v.blade_layer);
+            // Grade control: below zero the edge goes under the original ground level, to scrape gravel out of ruts
+            // and holes. Manual: below zero it is under the track line and digs in. The blade moves gravel only;
+            // digging the mud itself is not modelled yet. Each mode keeps its own setting.
+            const bool grade = v.blade_mode == BladeMode::Grade;
+            float& set = grade ? v.blade_layer : v.blade_height;
+            set = std::clamp(std::round((set + (c == Command::BladeRaise ? 0.05f : -0.05f)) * 20.0f) / 20.0f, -0.5f, grade ? 0.5f : 1.0f);
+            say(player, vi, K::BladeLayer, set, static_cast<float>(v.blade_mode));
+            break;
+        }
+        case Command::BladeMode:
+            if (!v.has_blade) break;
+            v.blade_mode = v.blade_mode == BladeMode::Grade ? BladeMode::Manual : BladeMode::Grade;
+            say(player, vi, K::BladeMode, static_cast<float>(v.blade_mode));
             break;
         case Command::Pave: {
             const int n = t.pave(under, rules().min_base);
@@ -276,7 +289,7 @@ void World::tick_machine(Machine& m) {
     if (m.has_blade && m.blade && (m.box.selected() < 0 || m.rig.gear() < 0 || m.rig.speed() < -0.3f)) {
         m.blade = false;
         let_go(m);
-        say(m.driver, vi, Event::Kind::Blade, m.blade_layer, 1.0f, false);
+        say(m.driver, vi, Event::Kind::Blade, blade_setting(m), 1.0f, false);
     }
 
     // The blade.
@@ -284,21 +297,28 @@ void World::tick_machine(Machine& m) {
         m.blade_pile = 0.0f;
         m.ripping = false;
         if (m.blade && m.rig.speed() >= 0.0f) {
-            // The edge holds the layer above the undisturbed ground under the tracks (firm ground plus mud, without
-            // ruts or gravel), like grade control on a real machine. Following the ruts instead drops the blade as
-            // the dozer sinks, so it bites deeper, slips, digs and sinks further; following the gravel makes it
-            // climb onto the layer it has just laid and build a ramp.
+            // Grade control holds the edge at the layer above the undisturbed ground under the tracks (firm ground
+            // plus mud, without ruts or gravel), like machine control on a real dozer. Following the ruts instead
+            // drops the blade as the dozer sinks, so it bites deeper, slips, digs and sinks further; following the
+            // gravel makes it climb onto the layer it has just laid and build a ramp. That second one is what a
+            // blade fixed to the machine does (manual): the edge rides the track line, pitching with it, and
+            // keeping the layer even is the driver's job.
             const auto& wheels = m.rig.spec().wheels;
             float base = 0.0f;
             for (const WheelSpec& w : wheels) {
                 const Cell& c = t.at(x + w.x, m.rig.y() + w.y);
                 base += c.hard + c.soft;
             }
-            m.blade_edge = base / static_cast<float>(wheels.size()) + m.blade_layer;
+            base /= static_cast<float>(wheels.size());
+            const Pose pose = m.rig.pose(x);
+            const float tracks = pose.z + std::tan(pose.pitch) * rl.blade_ahead;  // the track line, at the blade
+            m.blade_edge = m.blade_mode == BladeMode::Grade ? base + m.blade_layer : tracks + m.blade_height;
+            m.blade_from_tracks = m.blade_edge - tracks;
+            m.blade_from_ground = m.blade_edge - base;
             // Set below the original ground, the blade also rips up asphalt it passes under: the way to remove a
             // road laid in the wrong place. At or above ground level it only scrapes loose gravel off a road.
             const PushResult r = t.push({x + rl.blade_ahead, m.rig.y(), 1.0f, 0.0f, rl.blade_width, m.blade_edge, std::max(0.0f, x - x0),
-                                         m.blade_layer < -0.01f});
+                                         m.blade_from_ground < -0.01f});
             m.blade_pile = r.pile;
             m.ripping = r.ripped > 0;
             m.trail_left = rl.settle_time;

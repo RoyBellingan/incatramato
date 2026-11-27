@@ -141,14 +141,18 @@ Open from the playground sessions, roughly in order:
 3. **Decisions still open:** authority (host owns ground and tools, players own their vehicle's motion, is the
    recommendation; needed before multiplayer step 2) and whether vehicles belong to one player or are shared
    (needed before step 4).
-4. **Gradual blade height**: a 1:20 taper when the layer changes, so a road starts on a ramp instead of a 20 cm
+4. **The blade drag counts gravel it has not touched.** Lowered into an even layer, the blade feels the whole layer
+   above its edge for 4 m ahead (2.2 m3, 20 kN on 20 cm of gravel) before cutting any of it. Counting only what it
+   has cut needs the heap told apart from the layer it lies on: summing the cut each tick counts the heap again
+   every time the edge passes back over it.
+5. **Gradual blade height**: a 1:20 taper when the layer changes, so a road starts on a ramp instead of a 20 cm
    step that paving then freezes.
-5. **Check the grip table** (`data/tuning.json`, tyres) against the Caterpillar Performance Handbook's traction
+6. **Check the grip table** (`data/tuning.json`, tyres) against the Caterpillar Performance Handbook's traction
    table; the values are from memory.
-6. **Tuning questions:** gravel spreads a wheel's load at 2:1 (cautious; a loaded truck still bottoms out through
+7. **Tuning questions:** gravel spreads a wheel's load at 2:1 (cautious; a loaded truck still bottoms out through
    20 cm of gravel); the rig's own constants (belly friction, slip regularisation, brake band) are not in the
    tuning file yet.
-7. **Small things:** a "sinking now" value in the telemetry next to the total sinkage; the stock truck and the
+8. **Small things:** a "sinking now" value in the telemetry next to the total sinkage; the stock truck and the
    dozer are nearly the same yellow; the 3D view could draw the 2D slice line and start at true scale; the
    minimap drains the terrain change list, which multiplayer step 4 will need instead.
 

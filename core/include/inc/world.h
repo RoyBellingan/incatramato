@@ -28,6 +28,14 @@ enum class Command : std::uint8_t {
     NextVehicle,
     Cargo,  // truck: load at the quarry; dozer: blade down / up
     BladeLower, BladeRaise, Pave, Roll, Recover,
+    BladeMode,  // dozer: grade control on / off
+};
+
+// How the dozer's blade height is held. Real machines do both: an operator on the lift lever, or machine control
+// (laser or GNSS on the blade) driving the hydraulics to a target grade.
+enum class BladeMode : std::uint8_t {
+    Grade,   // the edge holds a layer above the undisturbed ground under the tracks, whatever the dozer stands on
+    Manual,  // the edge is fixed to the machine: a height against its track line, pitching with it
 };
 
 // What a player is holding, applied at every tick until replaced.
@@ -44,8 +52,10 @@ struct Event {
         Awd, DiffLock, LowRange, EngineBrake, Handbrake,  // on
         Seated,         // the player now drives `vehicle`
         NoFreeVehicle,  // every other vehicle has a driver
-        Blade,          // on: down; value: layer [m]; value2: 1 when it rose by itself for reversing
-        BladeLayer,     // value: layer [m]
+        Blade,          // on: down; value: the setting of the blade mode [m]; value2: down, the BladeMode; up, 1
+                        // when it rose by itself for reversing
+        BladeLayer,     // value: the setting of the blade mode [m]; value2: the BladeMode
+        BladeMode,      // value: the BladeMode
         Loaded,         // value: m3
         HoldToTip,      // Cargo pressed away from the quarry with gravel in the bed
         BedEmpty,       // Cargo pressed with nothing in the bed, or tipping emptied it
@@ -84,8 +94,11 @@ struct Machine {
     float trail_left = 0.0f;  // the lane behind a pushing blade keeps slumping a moment after it passes
 
     bool blade = false;
-    float blade_layer = 0.20f;  // edge above the original ground under the tracks [m]; negative digs into ruts
+    BladeMode blade_mode = BladeMode::Grade;
+    float blade_layer = 0.20f;  // grade control: edge above the original ground under the tracks [m]; negative digs into ruts
+    float blade_height = 0.0f;  // manual: edge above the track line, at the blade [m]; negative digs in
     float blade_edge = 0.0f;    // [m]
+    float blade_from_tracks = 0.0f, blade_from_ground = 0.0f;  // where the edge is, both ways, while it is down [m]
     float blade_pile = 0.0f;    // gravel being pushed [m3]
     float blade_force = 0.0f;   // what that costs the tracks [N]
     bool ripping = false;       // broke up asphalt this tick (only with the blade set below ground)

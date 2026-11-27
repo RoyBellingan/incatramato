@@ -119,13 +119,24 @@ std::string event_text(const Event& e, const World& w) {
         case K::NoFreeVehicle: return "EVERY OTHER VEHICLE HAS A DRIVER";
         case K::Blade:
             if (!e.on) return e.value2 > 0.5f ? "BLADE UP FOR REVERSING (G TO LOWER)" : "BLADE UP";
-            std::snprintf(buf, sizeof buf, "BLADE DOWN: SPREADING %.0f CM (Z/X THINNER/THICKER)", e.value * 100.0f);
+            if (static_cast<BladeMode>(static_cast<int>(e.value2)) == BladeMode::Grade)
+                std::snprintf(buf, sizeof buf, "BLADE DOWN, GRADE CONTROL: LEAVES %.0f CM (Z/X, C MANUAL)", e.value * 100.0f);
+            else
+                std::snprintf(buf, sizeof buf, "BLADE DOWN, MANUAL: EDGE %+.0f CM FROM TRACKS (Z/X, C GRADE)", e.value * 100.0f);
             return buf;
         case K::BladeLayer:
-            if (e.value < -0.01f) std::snprintf(buf, sizeof buf, "BLADE %.0f CM BELOW GROUND: SCRAPES RUTS, RIPS UP ROAD", -e.value * 100.0f);
+            if (static_cast<BladeMode>(static_cast<int>(e.value2)) == BladeMode::Manual) {
+                if (e.value < -0.01f) std::snprintf(buf, sizeof buf, "EDGE %.0f CM BELOW THE TRACKS: DIGS IN", -e.value * 100.0f);
+                else if (e.value < 0.01f) std::snprintf(buf, sizeof buf, "EDGE LEVEL WITH THE TRACKS");
+                else std::snprintf(buf, sizeof buf, "EDGE %.0f CM ABOVE THE TRACKS", e.value * 100.0f);
+            } else if (e.value < -0.01f) std::snprintf(buf, sizeof buf, "BLADE %.0f CM BELOW GROUND: SCRAPES RUTS, RIPS UP ROAD", -e.value * 100.0f);
             else if (e.value < 0.01f) std::snprintf(buf, sizeof buf, "BLADE AT GROUND LEVEL: STRIPPING GRAVEL");
             else std::snprintf(buf, sizeof buf, "BLADE LAYER %.0f CM", e.value * 100.0f);
             return buf;
+        case K::BladeMode:
+            return static_cast<BladeMode>(static_cast<int>(e.value)) == BladeMode::Grade
+                       ? "GRADE CONTROL ON: Z/X SET THE LAYER LEFT BEHIND"
+                       : "GRADE CONTROL OFF: Z/X MOVE THE EDGE AGAINST THE TRACKS";
         case K::Loaded:
             std::snprintf(buf, sizeof buf, "LOADED %.0f M3 OF GRAVEL", e.value);
             return buf;
@@ -546,12 +557,24 @@ void draw_hud(const Painter& p, const Game& g) {
     p.text(1076, 16, 1, rig.mean_sinkage() > s.clearance ? kRed : kText, buf);
     std::snprintf(buf, sizeof buf, "FUEL USED %.2f L", rig.fuel_kg() / 0.84f);
     p.text(1076, 32, 1, kText, buf);
+    // The dozer shows the blade both ways while it is down: the number Z/X set, and where that puts the edge
+    // the other way round, so grade control never hides that the edge is below the tracks.
+    const bool grade = v.blade_mode == BladeMode::Grade;
     if (v.has_blade && v.blade)
-        std::snprintf(buf, sizeof buf, "BLADE %.0f CM  PUSHING %.1f M3", v.blade_layer * 100.0f, v.blade_pile);
-    else if (v.has_blade) std::snprintf(buf, sizeof buf, "BLADE UP (%.0f CM SET)", v.blade_layer * 100.0f);
+        std::snprintf(buf, sizeof buf, grade ? "GRADE LAYER %.0f CM  PUSH %.1f M3" : "MANUAL EDGE %+.0f CM  PUSH %.1f M3",
+                      (grade ? v.blade_layer : v.blade_height) * 100.0f, v.blade_pile);
+    else if (v.has_blade)
+        std::snprintf(buf, sizeof buf, grade ? "BLADE UP (GRADE %.0f CM)" : "BLADE UP (MANUAL %+.0f CM)",
+                      (grade ? v.blade_layer : v.blade_height) * 100.0f);
     else std::snprintf(buf, sizeof buf, "GRAVEL %.0f / %.0f M3", v.gravel, v.capacity);
     p.text(1076, 48, 1, kText, buf);
-    std::snprintf(buf, sizeof buf, "X %.0f M", rig.x());
+    if (v.has_blade && v.blade && grade)
+        std::snprintf(buf, sizeof buf, "EDGE %.0f CM %s TRACKS  X %.0f", std::abs(v.blade_from_tracks) * 100.0f,
+                      v.blade_from_tracks < 0.0f ? "BELOW" : "ABOVE", rig.x());
+    else if (v.has_blade && v.blade)
+        std::snprintf(buf, sizeof buf, "EDGE %.0f CM %s GROUND  X %.0f", std::abs(v.blade_from_ground) * 100.0f,
+                      v.blade_from_ground < 0.0f ? "BELOW" : "ABOVE", rig.x());
+    else std::snprintf(buf, sizeof buf, "X %.0f M", rig.x());
     p.text(1076, 64, 1, kText, buf);
     if (v.trip_running) {
         std::snprintf(buf, sizeof buf, "TRIP %.1f S", v.trip_time);
@@ -625,7 +648,7 @@ void draw_map(const Painter& p, const Game& g, const Minimap& map, View view) {
     p.text(40, 694, 1, kDim,
            "DOTTED LINE: GROUND BETWEEN THE WHEELS   W/S THROTTLE BRAKE (SS HANDBRAKE)   SHIFT CLUTCH   1-6 N R GEARS   Q/E SHIFT DOWN/UP   M GEARBOX MODE   I STARTER   B ENGINE BRAKE   F3 CONTROLLER SETUP");
     p.text(40, 706, 1, kDim,
-           "T AWD   Y DIFF LOCK   L LOW RANGE   TAB VEHICLE   G LOAD / HOLD TO TIP (DOZER: BLADE, Z/X LAYER)   P PAVE   O ROLL   BACKSPACE RECOVER   F5 RESET   F6 RELOAD TUNING   F1 SOUND   F11 FULLSCREEN");
+           "T AWD   Y DIFF LOCK   L LOW RANGE   TAB VEHICLE   G LOAD / HOLD TO TIP (DOZER: BLADE, Z/X HEIGHT, C GRADE CONTROL)   P PAVE   O ROLL   BACKSPACE RECOVER   F5 RESET   F6 RELOAD TUNING   F1 SOUND   F11 FULLSCREEN");
 }
 
 // The controller setup screen: every function with what it is bound to.
@@ -709,6 +732,7 @@ bool key_action(SDL_Keycode key, Command& out) {
         case SDLK_BACKSPACE: out = Command::Recover; return true;
         case SDLK_z: out = Command::BladeLower; return true;
         case SDLK_x: out = Command::BladeRaise; return true;
+        case SDLK_c: out = Command::BladeMode; return true;
         default: return false;
     }
 }
@@ -856,7 +880,9 @@ std::string telemetry_json(const Game& g, std::uint32_t terrain_version) {
     j.key("blade");
     if (v.has_blade) {
         j.open('{');
-        j.flag("down", v.blade), j.field("layer", v.blade_layer), j.field("edge", v.blade_edge);
+        j.flag("down", v.blade), j.flag("grade", v.blade_mode == BladeMode::Grade), j.field("layer", v.blade_layer);
+        j.field("height", v.blade_height), j.field("edge", v.blade_edge);
+        j.field("from_tracks", v.blade_from_tracks), j.field("from_ground", v.blade_from_ground);
         j.field("pile", v.blade_pile), j.field("force", v.blade_force), j.field("x", rig.x() + g.world->rules().blade_ahead);
         j.close('}');
     } else {

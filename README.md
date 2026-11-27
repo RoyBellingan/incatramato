@@ -40,7 +40,8 @@ grade it with the dozer, pave it, and drive the stock truck across.
 | I (hold) | Starter, after a stall |
 | Tab | Next vehicle |
 | G | Truck: load at the quarry; elsewhere hold to tip (1.5 m3/s over the 2.2 m tailgate, let go to stop; tip on the move to spread a line). A marker shows where it lands; not within 3 m of another vehicle. Dozer: blade down / up (it lifts by itself when you reverse) |
-| Z / X | Dozer: blade lower / higher, 5 cm a step (from 50 cm below to 50 cm above the original ground). Below ground it also rips up asphalt |
+| Z / X | Dozer: blade lower / higher, 5 cm a step. Grade control: the layer it leaves, 50 cm below to 50 cm above the original ground. Manual: the edge against the tracks, 50 cm below to 1 m above. Below the original ground it also rips up asphalt |
+| C | Dozer: grade control on / off (the default is in `data/tuning.json`, `assists`) |
 | P / O | Lay asphalt under the vehicle (needs 15 cm of graded gravel) / roll it |
 | Backspace | Recover the vehicle to the quarry |
 | F1 | Sound on / off |
@@ -66,10 +67,20 @@ tree; `--tuning FILE` uses another. `loop_demo` and the tests always use the bui
 ### The dozer
 
 The blade cuts the gravel above its edge and pushes it as a heap in front, which slumps at the angle of repose
-(about 35 degrees): forward, into ruts and holes, and off the blade ends. Behind it is an even layer. The edge sits
-at the set height above the original ground under the tracks, not above the dozer itself, so it spreads a level
-layer instead of climbing onto what it has just laid (like grade control on a real machine). At 0 cm it strips the
-gravel down to the ground; below 0 it scrapes gravel out of ruts. It moves gravel only, not mud. Pushing a bigger
+(about 35 degrees): forward, into ruts and holes, and off the blade ends. Behind it is an even layer.
+
+The blade height works one of two ways, switched with C:
+
+- **Grade control** (the default, like laser or GNSS machine control): the edge sits at the set height above the
+  original ground under the tracks, not above the dozer itself, so it spreads a level layer instead of climbing
+  onto what it has just laid. Standing on 20 cm of gravel with the layer at 5 cm, it cuts 15 cm below its own
+  tracks. At 0 cm it strips the gravel down to the ground; below 0 it scrapes gravel out of ruts.
+- **Manual**: the edge is set against the track line and pitches with the machine, as on a dozer with only a lift
+  lever. At +5 cm on that 20 cm layer it scrapes nothing. Pushing a layer and driving onto it raises the edge by
+  the same amount, so keeping the layer even is up to you.
+
+The HUD shows both numbers while the blade is down: the setting, and where that puts the edge the other way
+round. It moves gravel only, not mud. Pushing a bigger
 heap takes more force, and too big a heap in mud will stall it. Gravel tipped on a finished road lies on top of the
 asphalt and can be pushed off again. The dozer has three reverse gears, a little faster than forward.
 

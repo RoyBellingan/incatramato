@@ -147,6 +147,13 @@
     "settle_time": 2.0        // a fresh heap keeps slumping this long [s]
   },
 
+  // Driving aids a machine starts with (F5 reset); each can be switched in the cab.
+  "assists": {
+    // The dozer holds its blade at a layer above the original ground (Z/X set the layer left behind). false: the
+    // blade is set against the tracks and pitches with the machine, as on a dozer without machine control. C toggles.
+    "blade_grade_control": true
+  },
+
   // Controllers: how far a pedal or lever is pressed becomes the pedal position through a dead zone at both ends
   // and a curve, position ^ gamma (1 straight; 2 gentle at first; 0.5 sharp at first). The keyboard pedals ramp
   // at these rates, in full travel per second.

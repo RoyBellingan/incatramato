@@ -47,10 +47,16 @@ struct Pedals {
     float key_clutch_down = 10.0f, key_clutch_up = 1.6f;
 };
 
+// Driving aids, as a new machine starts with them; the driver can switch each one in the cab.
+struct Assists {
+    bool blade_grade_control = true;  // the dozer holds its blade layer itself (BladeMode::Grade)
+};
+
 struct Tuning {
     SoilParams soil;
     ShiftParams shift;
     Rules rules;
+    Assists assists;
     Pedals pedals;
     std::map<std::string, VehicleSpec> vehicles;  // without their tyres: a vehicle is fitted with one by name
     std::map<std::string, Tyre> tyres;

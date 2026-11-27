@@ -295,10 +295,15 @@ function render(d) {
   if (d.blade) {
     $("blade").innerHTML =
       bar("Blade", d.blade.down ? 1 : 0, 1, d.blade.down ? "down" : "up", { colour: "var(--amber)" }) +
-      bar("Layer set", d.blade.layer, 0.5, `${(d.blade.layer * 100).toFixed(0)} cm`, { centred: true, colour: "var(--gravel)" }) +
+      (d.blade.grade
+        ? bar("Grade: layer set", d.blade.layer, 0.5, `${(d.blade.layer * 100).toFixed(0)} cm`, { centred: true, colour: "var(--gravel)" })
+        : bar("Manual: edge set", d.blade.height, 1.0, `${(d.blade.height * 100).toFixed(0)} cm`, { centred: true, colour: "var(--gravel)" })) +
       bar("Pushing", d.blade.pile, 10, `${d.blade.pile.toFixed(2)} m³`, { colour: "var(--gravel)" }) +
       bar("Push force", d.blade.force, 100000, `${kN(d.blade.force)} kN`, { colour: "var(--red)" }) +
-      `<p class="note">Edge at ${d.blade.edge.toFixed(2)} m: the set layer above the undisturbed ground under the tracks (below it when negative).</p>`;
+      `<p class="note">Edge at ${d.blade.edge.toFixed(2)} m: ${(d.blade.from_ground * 100).toFixed(0)} cm from the undisturbed ground, ` +
+      `${(d.blade.from_tracks * 100).toFixed(0)} cm from the track line. ` +
+      (d.blade.grade ? "Grade control holds the layer above the ground (C: manual)."
+                     : "Manual: the edge is set against the tracks and pitches with the machine (C: grade control).") + `</p>`;
   }
 
   const rows = d.wheels.map((w) => {
