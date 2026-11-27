@@ -110,7 +110,7 @@ guaranteed.
 
 ## Steps
 
-### 1. A `World` in the core
+### 1. A `World` in the core (done)
 
 Move the game rules out of `apps/play.cpp` into `core/` as a `World`: the terrain, every vehicle with its shift
 controller and tool state (bed, blade, layer), and the rules that today sit in `apply()` and `update()`.

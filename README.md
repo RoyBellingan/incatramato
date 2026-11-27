@@ -38,8 +38,8 @@ grade it with the dozer, pave it, and drive the stock truck across.
 | B | Engine brake |
 | I (hold) | Starter, after a stall |
 | Tab | Next vehicle |
-| G | Truck: load at the quarry; elsewhere hold to tip (1.5 m3/s, let go to stop; tip on the move to spread a line). A marker shows where it lands. Dozer: blade down / up |
-| Z / X | Dozer: blade lower / higher, 5 cm a step (from 50 cm below to 50 cm above the original ground) |
+| G | Truck: load at the quarry; elsewhere hold to tip (1.5 m3/s over the 2.2 m tailgate, let go to stop; tip on the move to spread a line). A marker shows where it lands; not within 3 m of another vehicle. Dozer: blade down / up |
+| Z / X | Dozer: blade lower / higher, 5 cm a step (from 50 cm below to 50 cm above the original ground). Below ground it also rips up asphalt |
 | P / O | Lay asphalt under the vehicle (needs 15 cm of graded gravel) / roll it |
 | Backspace | Recover the vehicle to the quarry |
 | F1 | Sound on / off |
@@ -71,6 +71,12 @@ loads are fixed shares of the weight until the 3D vehicle (M1).
 - `--telemetry-lan` also accepts connections from other machines, for a tablet: then open
   `http://<this machine's address>:8787/`. Off by default, since anyone on the network could then read it.
 - `/snapshot` returns the latest JSON once and `/stream` is a Server-Sent Events stream of it, for your own tools.
+
+**http://localhost:8787/3d** shows the whole ground in 3D (WebGL2, no libraries), reloaded whenever it changes, with
+the vehicles as boxes. Three views: the surface as it is, the ground without its gravel (mud, ruts, firm ground),
+and gravel thickness (blue: too thin to pave, green: 15 cm or more, orange: heaps). A height slider exaggerates
+relief, and a readout gives the exact values of the cell under the cross. `/terrain.bin` is the ground it loads:
+a small binary format described above `terrain_blob()` in `apps/play.cpp`.
 
 ### Wheels, pedals, throttles, shifters
 
@@ -112,22 +118,22 @@ half the speed in low range), a friction clutch that either holds or slips, engi
 260 m run, 100 m of it through half a metre of mud. Each line starts on untouched ground.
   highway tyres, RWD, open diffs                 STUCK   5 m into the mud (of 100)
   highway tyres, AWD + diff locks                STUCK   5 m into the mud (of 100)
-  mud tyres, RWD, open diffs                     STUCK  26 m into the mud (of 100)
-  mud tyres, AWD + diff locks                    crossed     41.3 s   22.7 km/h avg   0.63 L
-  tracked dozer                                  crossed     63.0 s   14.9 km/h avg   0.51 L
+  mud tyres, RWD, open diffs                     STUCK  27 m into the mud (of 100)
+  mud tyres, AWD + diff locks                    crossed     41.2 s   22.7 km/h avg   0.63 L
+  tracked dozer                                  crossed     62.7 s   14.9 km/h avg   0.51 L
 
 Same world from here on. The well-equipped truck keeps using the track:
-  pass  1 (deepest rut after: 24 cm)             crossed     41.3 s   22.7 km/h avg   0.63 L
-  pass  2 (deepest rut after: 26 cm)             crossed     38.4 s   24.4 km/h avg   0.58 L
-  pass  3 (deepest rut after: 29 cm)             crossed     39.4 s   23.8 km/h avg   0.60 L
-  pass  4 (deepest rut after: 32 cm)             crossed     40.6 s   23.1 km/h avg   0.62 L
-  pass  5 (deepest rut after: 36 cm)             crossed     42.4 s   22.1 km/h avg   0.65 L
+  pass  1 (deepest rut after: 24 cm)             crossed     41.2 s   22.7 km/h avg   0.63 L
+  pass  2 (deepest rut after: 26 cm)             crossed     38.3 s   24.4 km/h avg   0.58 L
+  pass  3 (deepest rut after: 29 cm)             crossed     39.2 s   23.8 km/h avg   0.60 L
+  pass  4 (deepest rut after: 32 cm)             crossed     40.5 s   23.1 km/h avg   0.62 L
+  pass  5 (deepest rut after: 36 cm)             crossed     42.3 s   22.2 km/h avg   0.64 L
   pass  6 (deepest rut after: 50 cm)             STUCK  67 m into the mud (of 100)
 
 Build a gravel road: 14 loads of 10 m3, then grade.
-  gravel: 19 cm on the crown, 63 cm where the ruts were
-  stock truck on gravel, first pass              crossed     22.2 s   42.1 km/h avg   0.27 L
-  stock truck on gravel, second pass             crossed     22.2 s   42.1 km/h avg   0.27 L
+  gravel: 19 cm on the crown, 62 cm where the ruts were
+  stock truck on gravel, first pass              crossed     22.3 s   42.0 km/h avg   0.27 L
+  stock truck on gravel, second pass             crossed     22.3 s   42.0 km/h avg   0.27 L
 
 Pave and roll it.
   paved 547 m2
@@ -145,10 +151,11 @@ All soil, tyre and vehicle numbers are placeholders chosen to be plausible. Noth
 | `core/include/inc/drivetrain.h` | Engine, clutch, gearbox, and a differential tree solved exactly for any layout |
 | `core/include/inc/transmission.h` | Shift controller: manual, sequential, automatic |
 | `core/include/inc/rig.h` | Straight-line test rig |
+| `core/include/inc/world.h` | The world: site, vehicles and tools, players, commands, ticks (50 Hz) and events |
 | `core/include/inc/presets.h` | Placeholder truck, dozer, tyres and test course |
 | `apps/play.cpp` | The playable prototype (SDL2) |
 | `apps/input.h` | Controller bindings and the setup wizard |
 | `apps/sound.h` | Sound synthesis |
-| `apps/telemetry.h`, `apps/telemetry_page.h` | Telemetry HTTP server (POSIX sockets, no dependencies) and the dashboard page |
+| `apps/telemetry.h`, `apps/telemetry_page.h`, `apps/view3d_page.h` | Telemetry HTTP server (POSIX sockets, no dependencies), the dashboard page and the 3D view |
 | `apps/loop_demo.cpp` | The numbers demo |
 | `tests/core_tests.cpp` | Checks: material conservation, sinkage, differentials, clutch and gearbox, the loop, terrain replication |

@@ -76,6 +76,7 @@ once M1 is done.
 - Ground as a grid of columns: firm base, soft layer, gravel, rut depth, paving state, loose gravel on asphalt.
 - Wheels and tracks sink according to ground pressure; gravel spreads the load; ruts persist.
 - Traction and compaction resistance from the standard terramechanics formulas; slipping wheels dig.
+- Grip per tyre type and surface: tracks grip far better than tyres on earth and in mud, far worse on asphalt.
 - Engine with inertia, idle governor, stall, starter, engine braking and exhaust brake.
 - Friction clutch that holds or slips; gears that grind unless the clutch is down or the revs match.
 - Manual, sequential and automatic shifting over the same model.
@@ -84,13 +85,17 @@ once M1 is done.
 - A dozer blade for any heading: cuts gravel above its edge, pushes the heap, which slumps at the angle of repose
   and spills off the blade ends; the heap's size is the resistance the tracks feel.
 - Wheels and tracks stand on the average of the ground under their contact patch, so a track bridges a tyre rut.
+- A `World` that holds the site, every vehicle and its tools, and the players: commands in, fixed 50 Hz ticks,
+  events out. Every vehicle ticks whether driven or parked. Loose gravel under a chassis is ploughed ahead of the
+  leading axle instead of lifting the vehicle; no tipping within 3 m of another vehicle.
 - Per-wheel and body telemetry from the rig, served live to a browser by the playground.
 - Fuel burn, high-centring, grades.
 - Payload: cargo weighs on the wheels that carry it. Brakes and handbrake hold a stopped vehicle on a slope.
 
 ## Known gaps in the core
 
-- **All parameters are placeholders.** The demo behaves plausibly because I tuned one soil constant until the
+- **All parameters are placeholders.** The grip table (`soil.h`) is approximate and quoted from memory of the
+  Caterpillar Performance Handbook; check it against the handbook. The demo behaves plausibly because I tuned one soil constant until the
   drivetrain options made a difference. Treat the numbers as a starting point.
 - **Asphalt barely beats gravel.** 22.0 s against 22.2 s in the demo, about 1%. Nothing yet makes rough roads slow:
   no roughness, no wear, no cargo damage. The late game needs a design answer here, not just code.
@@ -107,7 +112,7 @@ once M1 is done.
   a loaded truck sinks deeper and accelerates slower, but the load does not shift on slopes or under braking.
 - **The playground cheats on tools.** Trucks tip ahead of themselves because nothing can turn round in one
   dimension; paving and rolling are key presses; vehicles pass through each other.
-- **The blade moves gravel only.** It cannot dig mud or firm ground, and nothing spills over its top, however
+- **The blade moves gravel only** (and, set below ground, rips asphalt back into gravel). It cannot dig mud or firm ground, and nothing spills over its top, however
   big the heap. The blade does not back-drag in reverse. Push resistance is the heap's weight times a placeholder
   friction coefficient; there is no separate cutting force.
 - **No suspension.** Wheel loads are fixed shares of the weight; the telemetry page says so rather than show

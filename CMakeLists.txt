@@ -14,7 +14,8 @@ add_library(inc_core
   core/src/drivetrain.cpp
   core/src/rig.cpp
   core/src/transmission.cpp
-  core/src/presets.cpp)
+  core/src/presets.cpp
+  core/src/world.cpp)
 target_include_directories(inc_core PUBLIC core/include)
 target_compile_options(inc_core PUBLIC -Wall -Wextra -Wpedantic)
 

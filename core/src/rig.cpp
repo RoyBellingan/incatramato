@@ -58,6 +58,8 @@ Rig::Rig(VehicleSpec spec, Terrain& terrain, SoilParams soil, float x, float y)
     for (auto* v : {&omega_, &torque_, &a_, &b_, &f_, &df_, &fmax_}) v->assign(n, 0.0f);
     diggable_.assign(n, 0);
     wheel_tm_.assign(n, WheelTelemetry{});
+    for (const WheelSpec& w : spec_.wheels)  // the wheel tracks: one per distinct lateral position
+        if (std::find(track_y_.begin(), track_y_.end(), w.y) == track_y_.end()) track_y_.push_back(w.y);
 }
 
 void Rig::step(const Controls& u, float dt) {
@@ -104,7 +106,9 @@ void Rig::step(const Controls& u, float dt) {
         const float wheel_resist = (compaction_resistance(ahead, soil_, tyre, load) + c.rolling) *
                                    (1.0f + soil_.viscous * c.softness * std::abs(v_));
         resist += wheel_resist;
-        sink += std::max(0.0f, terrain_->at(wx, y_).surface() - under.surface());  // below the crown between the tracks
+        // How far the wheel sits below the crown between the tracks. Only fixed ground counts (firm, mud, the road):
+        // loose gravel between the wheels is pushed aside by the axles, it does not hold the chassis up.
+        sink += std::max(0.0f, terrain_->at(wx, y_).fixed_top() - under.surface());
 
         const float slip_v = omega_[i] * r - v_;
         const float denom = std::max({std::abs(omega_[i] * r), std::abs(v_), kMinSlipSpeed});
@@ -210,9 +214,18 @@ void Rig::step(const Controls& u, float dt) {
     const auto [rear, front] = std::minmax_element(spec_.wheels.begin(), spec_.wheels.end(),
                                                    [](const WheelSpec& p, const WheelSpec& q) { return p.x < q.x; });
     const float xf = front->x + 0.5f * tyre.length, xr = rear->x - 0.5f * tyre.length;  // ends of the footprint
-    const Cell& cf = terrain_->at(x_ + xf, y_);
-    const Cell& cr = terrain_->at(x_ + xr, y_);
-    const float rise = (cf.hard + cf.soft + cf.gravel) - (cr.hard + cr.soft + cr.gravel);
+    // Slope from the ground under the wheel tracks at either end: not from the centre line, where a heap of gravel
+    // between the wheels would read as a hill. The original ground level, raised by whatever lies above it, so a
+    // rut is not a gradient, and gravel filling a rut only counts where it stands above the old surface.
+    auto ground_at = [&](float wx) {
+        float sum = 0.0f;
+        for (float ty : track_y_) {
+            const Cell& c = terrain_->at(wx, y_ + ty);
+            sum += std::max(c.hard + c.soft, c.surface());
+        }
+        return sum / static_cast<float>(track_y_.size());
+    };
+    const float rise = ground_at(x_ + xf) - ground_at(x_ + xr);
     const float run = xf - xr;
     const float weight = mass() * kG;
     const float force = traction - weight * rise / std::hypot(run, rise);

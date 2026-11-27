@@ -131,6 +131,7 @@ private:
     std::vector<char> diggable_;
     float external_ = 0.0f;
     float payload_ = 0.0f;
+    std::vector<float> track_y_;  // lateral position of each wheel track
     std::vector<WheelTelemetry> wheel_tm_;
     BodyTelemetry body_tm_;
 };

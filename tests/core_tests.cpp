@@ -6,6 +6,7 @@
 
 #include "inc/presets.h"
 #include "inc/transmission.h"
+#include "inc/world.h"
 
 using namespace inc;
 
@@ -167,6 +168,31 @@ void gravel_on_a_road_stays_on_top() {
     Cell stray;
     stray.loose = 0.1f;  // loose gravel on unpaved ground is not a valid cell
     CHECK(t.apply({{0, stray}}) == 1);
+}
+
+// A blade set below the road rips the asphalt up into a loose base again, keeping every stone; without ripping
+// the same pass leaves the road alone.
+void blade_rips_up_a_road() {
+    auto road = [] {
+        Terrain t(200, 40, 0.25f);
+        Cell base;
+        base.gravel = 0.2f;
+        t.fill({5.0f, 2.0f, 45.0f, 8.0f}, base);
+        t.pave({5.0f, 2.0f, 45.0f, 8.0f}, 0.15f);
+        t.roll({5.0f, 2.0f, 45.0f, 8.0f});
+        return t;
+    };
+    Terrain kept = road(), ripped = road();
+    const double before = ripped.gravel_volume();
+    drive_blade(kept, 15.0f, 5.0f, 1.0f, 0.0f, 10.0f, 0.1f);  // edge inside the road, no ripping
+    CHECK(kept.at(20.0f, 5.0f).paving == Paving::Rolled && kept.at(20.0f, 5.0f).gravel == 0.2f);
+    int broken = 0;
+    for (float d = 0.0f; d <= 10.0f; d += 0.05f) broken += ripped.push({15.0f + d, 5.0f, 1, 0, 3.4f, 0.1f, 0.05f, true}).ripped;
+    CHECK(broken > 0);
+    CHECK(ripped.at(20.0f, 5.0f).paving == Paving::None);
+    CHECK(ripped.at(20.0f, 5.0f).surface() < 0.1f + 1e-3f);  // cut down to the edge, the rest pushed on
+    CHECK(near(ripped.gravel_volume(), before, 0.01));
+    CHECK(ripped.at(20.0f, 7.5f).paving == Paving::Rolled);  // beyond the blade's ends the road is untouched
 }
 
 void paving_needs_a_base() {
@@ -585,6 +611,76 @@ void sequential_reverse() {
     CHECK(none.ratio(-1, false) == 0.0f);  // no such gear: neutral, not a read past the end
 }
 
+// Every vehicle ticks, driven or not: a parked engine keeps idling and burning fuel.
+void parked_vehicles_keep_running() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    const int parked = (w->vehicle_of(me) + 1) % 3;
+    const float fuel0 = w->machine(parked).rig.fuel_kg();
+    for (int i = 0; i < 100; ++i) w->tick();
+    CHECK(w->machine(parked).rig.fuel_kg() > fuel0);
+    CHECK(w->machine(parked).rig.engine_running());
+    CHECK(near(w->time(), 2.0, 1e-9));
+}
+
+// No tipping near another vehicle: the gravel stays in the bed and the player is told once.
+void no_tipping_near_a_vehicle() {
+    auto w = make_playground();
+    const PlayerId me = w->join();  // the stock truck at 14 m
+    Machine& truck = w->machine(w->vehicle_of(me));
+    w->machine(1).rig = Rig(w->machine(1).rig.spec(), w->terrain(), SoilParams{}, 60.0f, w->course().lane_y);  // parked at 60 m
+    truck.rig = Rig(truck.rig.spec(), w->terrain(), SoilParams{}, 50.0f, w->course().lane_y);  // gravel would land at 56 m
+    truck.gravel = kLoad;
+    PlayerControls tip;
+    tip.tip = true;
+    w->controls(me, tip);
+    for (int i = 0; i < 50; ++i) w->tick();
+    CHECK(truck.gravel == kLoad);
+    int refusals = 0;
+    for (const Event& e : w->take_events()) refusals += e.kind == Event::Kind::TipBlocked;
+    CHECK(refusals == 1);
+}
+
+// A load tipped standing still pours over the whole tailgate: a heap wider and lower than a cone from one point.
+void tipping_pours_across_the_tailgate() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    Machine& truck = w->machine(w->vehicle_of(me));
+    w->machine(1).rig = Rig(w->machine(1).rig.spec(), w->terrain(), SoilParams{}, 160.0f, w->course().lane_y);  // out of the way
+    w->machine(2).rig = Rig(w->machine(2).rig.spec(), w->terrain(), SoilParams{}, 170.0f, w->course().lane_y);
+    truck.rig = Rig(truck.rig.spec(), w->terrain(), SoilParams{}, 50.0f, w->course().lane_y);
+    truck.gravel = kLoad;
+    PlayerControls tip;
+    tip.tip = true;
+    w->controls(me, tip);
+    for (int i = 0; i < 50 * 10; ++i) w->tick();
+    CHECK(truck.gravel == 0.0f);
+    CHECK(near(w->terrain().gravel_volume(), kLoad, 0.01));
+    const float land = 50.0f + kTipAhead, y = w->course().lane_y;
+    CHECK(w->terrain().at(land, y).gravel < 1.5f);  // a point-poured cone would stand about 1.6 m
+    CHECK(w->terrain().at(land, y + 2.0f).gravel > 0.4f && w->terrain().at(land, y - 2.0f).gravel > 0.4f);
+}
+
+// A heap between the wheels does not hold a truck up: the chassis ploughs it ahead. Gravel is only lost where
+// the wheels spin climbing it, which throws a little away.
+void a_heap_between_the_wheels_is_ploughed() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    Machine& truck = w->machine(w->vehicle_of(me));
+    truck.rig = Rig(truck.rig.spec(), w->terrain(), SoilParams{}, 20.0f, w->course().lane_y);
+    w->terrain().dump_gravel(30.0f, w->course().lane_y, 3.0f);  // a 3 m3 heap on firm ground, 0.9 m high
+    const double before = w->terrain().gravel_volume();
+    w->command(me, Command::Gear1);
+    PlayerControls go;
+    go.throttle = 0.6f;
+    w->controls(me, go);
+    for (int i = 0; i < 50 * 15; ++i) w->tick();
+    CHECK(truck.rig.x() > 40.0f);
+    CHECK(w->terrain().gravel_volume() > 0.9 * before && w->terrain().gravel_volume() < before + 0.01);
+    // The 1 m peak is cut to the chassis line: 40 cm clearance above the wheels, which ride on the heap's flanks.
+    CHECK(w->terrain().at(30.0f, w->course().lane_y).surface() < 0.6f);
+}
+
 void exhaust_brake_holds_a_descent() {
     auto speed_after_descent = [](bool exhaust_brake) {
         Terrain t(2400, 48, 0.25f);
@@ -699,6 +795,7 @@ int main() {
     blade_cuts_gravel_not_mud();
     blade_works_at_any_heading();
     gravel_on_a_road_stays_on_top();
+    blade_rips_up_a_road();
     paving_needs_a_base();
     ground_pressure_decides_sinkage();
     differential_maths();
@@ -718,6 +815,10 @@ int main() {
     payload_loads_the_rear_bogie();
     handbrake_holds_on_a_slope();
     sequential_reverse();
+    parked_vehicles_keep_running();
+    no_tipping_near_a_vehicle();
+    a_heap_between_the_wheels_is_ploughed();
+    tipping_pours_across_the_tailgate();
     exhaust_brake_holds_a_descent();
     std::printf(failures ? "%d check(s) failed\n" : "all checks passed\n", failures);
     return failures ? 1 : 0;

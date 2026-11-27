@@ -15,8 +15,7 @@
 
 #include "font5x7.h"
 #include "input.h"
-#include "inc/presets.h"
-#include "inc/transmission.h"
+#include "inc/world.h"
 #include "sound.h"
 #include "telemetry.h"
 
@@ -25,19 +24,10 @@ using namespace inc;
 namespace {
 
 constexpr int kW = 1280, kH = 720;
-constexpr float kDt = 1e-3f;
 constexpr float kScale = 40.0f;  // pixels per metre in the side view
 constexpr float kViewTop = 140.0f, kGroundY = 470.0f, kViewBottom = 590.0f, kCamScreenX = 440.0f;
-constexpr float kQuarryEnd = 45.0f, kTownStart = 120.0f;
-constexpr float kLoad = 10.0f;      // m3 of gravel per truck load
-constexpr float kMinBase = 0.15f;   // gravel needed under asphalt [m]
-constexpr float kTipAhead = 6.2f;   // where tipped gravel lands: ahead, since nothing can turn round in one lane [m]
-constexpr float kTipRate = 1.5f;    // gravel out of the bed while G is held [m3/s]; a full load takes about 7 s
-constexpr float kBladeAhead = 2.05f;   // cutting edge ahead of the dozer's centre, where it is drawn [m]
-constexpr float kBladeWidth = 3.4f;    // [m]
-constexpr float kGravelDensity = 1800.0f;  // loose aggregate [kg/m3]
-constexpr float kPushFriction = 0.5f;  // placeholder: force to shove a pile, per unit of its weight
 constexpr const char* kBindingsFile = "input.cfg";  // controller bindings, in the working directory
+constexpr Uint32 kDoubleTapMs = 350;  // two brake presses this close together toggle the handbrake
 
 struct Rgb {
     Uint8 r, g, b;
@@ -50,69 +40,48 @@ Rgb shade(Rgb c, float k) {
     return {static_cast<Uint8>(c.r * k), static_cast<Uint8>(c.g * k), static_cast<Uint8>(c.b * k)};
 }
 
-// ---------------------------------------------------------------- game state
+// ---------------------------------------------------------------- the local client
 
-struct Vehicle {
-    const char* label;
+// What only this screen keeps about a vehicle: its paint, where it was at the start of the last tick (to draw
+// it smoothly between ticks), and how far its wheels have turned.
+struct Look {
     Rgb paint;
-    Rig rig;
-    float home_x;
-    float capacity;  // m3 of gravel it can carry
-    bool has_blade;
-    ShiftController box{};
-    DriverInput in{};
-    Controls out{};
-    int lever = 0;  // manual: lever position; automatic: >0 D, 0 N, <0 R
-    int pending_shift = 0;
-    float gravel = 0.0f;
-    bool tipping = false;  // G held this frame with gravel in the bed
-    bool blade = false;
-    float blade_layer = 0.20f;  // edge height above the original ground under the tracks [m]; negative digs into ruts
-    float blade_edge = 0.0f;    // elevation of the cutting edge [m]
-    float blade_pile = 0.0f;    // gravel it is pushing [m3]
-    float blade_force = 0.0f;   // what that costs the tracks [N]
-    std::vector<float> wheel_angle{};
+    float x_prev;
+    std::vector<float> wheel_angle;
 };
 
-presets::Course make_course() {
-    // 180 m of firm ground with 40 m of half-metre-deep mud between the quarry and the town.
-    presets::Course c{Terrain(720, 48, 0.25f), 6.0f, 16.0f, 150.0f, {60.0f, 0.0f, 100.0f, 12.0f}, {58.0f, 3.5f, 102.0f, 8.5f}};
-    Cell mud;
-    mud.hard = -0.5f;
-    mud.soft = 0.5f;
-    c.terrain.fill(c.mud, mud);
-    c.terrain.take_deltas();
-    return c;
-}
-
+// One player in a world, plus what only this screen needs. The world holds every rule; this turns keys into
+// commands and controls, events into messages, and ticks the world as real time passes.
 struct Game {
-    presets::Course course = make_course();
-    std::vector<Vehicle> vehicles;
-    int active = 0;
+    std::unique_ptr<World> world = make_playground();
+    PlayerId me = 0;
+    std::vector<Look> looks;
     std::string message = "DRIVE TO THE TOWN. TAB SWITCHES VEHICLE.";
     float message_time = 6.0f;
     float key_throttle = 0.0f, key_brake = 0.0f, key_clutch = 0.0f;  // keyboard pedals, ramped
-    bool trip_running = false;
-    float trip_time = 0.0f, trip_fuel0 = 0.0f;
-    float sim_debt = 0.0f;  // real time not yet simulated, always less than one step after update()
-    double clock = 0.0;     // simulated time [s]
-    float settle_x = 0.0f, settle_left = 0.0f;  // a fresh heap keeps slumping for a moment after tipping stops
+    float tick_debt = 0.0f;  // real time not yet simulated, less than one tick after update()
+    float alpha = 0.0f;      // how far the picture is between the last two ticks, 0..1
     std::string last_trip;
 
     Game() {
-        add("STOCK TRUCK - HIGHWAY TYRES", {222, 172, 44}, presets::truck_6x6(presets::highway_tyre()), 14.0f, kLoad, false);
-        add("OFFROAD TRUCK - MUD TYRES", {200, 84, 52}, presets::truck_6x6(presets::mud_tyre()), 24.0f, kLoad, false);
-        add("DOZER - TRACKED", {236, 196, 36}, presets::dozer(), 34.0f, 0.0f, true);
+        me = world->join();
+        const Rgb paints[] = {{222, 172, 44}, {200, 84, 52}, {236, 196, 36}};
+        for (std::size_t i = 0; i < world->machines().size(); ++i) {
+            const Machine& m = world->machines()[i];
+            looks.push_back({paints[i % 3], m.rig.x(), std::vector<float>(m.rig.spec().wheels.size(), 0.0f)});
+        }
+        world->take_events();  // being seated at the start needs no message
     }
     Game(const Game&) = delete;
     Game& operator=(const Game&) = delete;
 
-    void add(const char* label, Rgb paint, VehicleSpec spec, float x, float capacity, bool blade) {
-        const std::size_t wheels = spec.wheels.size();
-        vehicles.push_back({label, paint, Rig(std::move(spec), course.terrain, SoilParams{}, x, course.lane_y), x, capacity, blade});
-        vehicles.back().wheel_angle.assign(wheels, 0.0f);
+    int active() const { return world->vehicle_of(me); }
+    Machine& car() { return world->machine(active()); }
+    const Machine& car() const { return world->machine(active()); }
+    float shown_x(int i) const {  // where to draw vehicle i: between its last two ticks
+        const float x = world->machine(i).rig.x(), x0 = looks[static_cast<std::size_t>(i)].x_prev;
+        return std::abs(x - x0) > 2.0f ? x : x0 + (x - x0) * alpha;  // a jump (recovery) is not smoothed
     }
-    Vehicle& car() { return vehicles[active]; }
     void say(std::string text) {
         message = std::move(text);
         message_time = 3.0f;
@@ -125,13 +94,6 @@ struct Held {
     float throttle_axis = 0.0f, brake_axis = 0.0f, clutch_axis = 0.0f;     // analogue pedals and levers
 };
 
-enum class Action {
-    Gear0, Gear1, Gear2, Gear3, Gear4, Gear5, Gear6, Reverse, ShiftUp, ShiftDown, NextMode, ToggleAwd, ToggleLock,
-    ToggleLow, ToggleEngineBrake, ToggleHandbrake, NextVehicle, Cargo, Pave, Roll, Recover, BladeLower, BladeRaise,
-};
-
-constexpr Uint32 kDoubleTapMs = 350;  // two brake presses this close together toggle the handbrake
-
 const char* mode_name(ShiftMode m) {
     switch (m) {
         case ShiftMode::Manual: return "MANUAL";
@@ -141,207 +103,103 @@ const char* mode_name(ShiftMode m) {
     return "AUTOMATIC";
 }
 
-void apply(Game& g, Action a) {
-    Vehicle& v = g.car();
-    Terrain& t = g.course.terrain;
-    const int top = static_cast<int>(v.rig.spec().gearbox.forward.size());
-    const float x = v.rig.x();
-    const Rect under{x - 4.0f, g.course.road.y0, x + 4.0f, g.course.road.y1};
+// The HUD's words for what the world reports.
+std::string event_text(const Event& e, const World& w) {
+    using K = Event::Kind;
     char buf[96];
-    switch (a) {
-        case Action::Gear0: case Action::Gear1: case Action::Gear2: case Action::Gear3:
-        case Action::Gear4: case Action::Gear5: case Action::Gear6:
-            if (v.box.mode != ShiftMode::Sequential)
-                v.lever = std::min(static_cast<int>(a) - static_cast<int>(Action::Gear0), top);
-            break;
-        case Action::Reverse:
-            if (v.box.mode != ShiftMode::Sequential) v.lever = -1;
-            break;
-        case Action::ShiftUp:
-        case Action::ShiftDown: {
-            const int step = a == Action::ShiftUp ? 1 : -1;
-            if (v.box.mode == ShiftMode::Sequential) v.pending_shift = step;
-            else if (v.box.mode == ShiftMode::Manual) v.lever = std::clamp(v.lever + step, -1, top);
-            else v.lever = std::clamp((v.lever > 0 ? 1 : v.lever) + step, -1, 1);  // R - N - D
-            break;
+    switch (e.kind) {
+        case K::GearboxMode: return std::string("GEARBOX: ") + mode_name(static_cast<ShiftMode>(static_cast<int>(e.value)));
+        case K::Awd: return e.on ? "AWD ENGAGED" : "AWD OFF";
+        case K::DiffLock: return e.on ? "DIFFS LOCKED" : "DIFFS OPEN";
+        case K::LowRange: return e.on ? "LOW RANGE SELECTED (STOP OR CLUTCH TO ENGAGE)" : "HIGH RANGE SELECTED";
+        case K::EngineBrake: return e.on ? "ENGINE BRAKE ON" : "ENGINE BRAKE OFF";
+        case K::Handbrake: return e.on ? "HANDBRAKE ON (DOUBLE-TAP S TO RELEASE)" : "HANDBRAKE OFF";
+        case K::Seated: return w.machine(e.vehicle).label;
+        case K::NoFreeVehicle: return "EVERY OTHER VEHICLE HAS A DRIVER";
+        case K::Blade:
+            if (!e.on) return "BLADE UP";
+            std::snprintf(buf, sizeof buf, "BLADE DOWN: SPREADING %.0f CM (Z/X THINNER/THICKER)", e.value * 100.0f);
+            return buf;
+        case K::BladeLayer:
+            if (e.value < -0.01f) std::snprintf(buf, sizeof buf, "BLADE %.0f CM BELOW GROUND: SCRAPES RUTS, RIPS UP ROAD", -e.value * 100.0f);
+            else if (e.value < 0.01f) std::snprintf(buf, sizeof buf, "BLADE AT GROUND LEVEL: STRIPPING GRAVEL");
+            else std::snprintf(buf, sizeof buf, "BLADE LAYER %.0f CM", e.value * 100.0f);
+            return buf;
+        case K::Loaded:
+            std::snprintf(buf, sizeof buf, "LOADED %.0f M3 OF GRAVEL", e.value);
+            return buf;
+        case K::HoldToTip: return "HOLD G TO TIP, LET GO TO STOP";
+        case K::BedEmpty: return "EMPTY. LOAD AT THE QUARRY.";
+        case K::TipBlocked: return "TOO CLOSE TO ANOTHER VEHICLE: NO TIPPING HERE";
+        case K::Paved:
+            if (e.value > 0.0f) std::snprintf(buf, sizeof buf, "LAID %.0f M2 OF ASPHALT. ROLL IT (O).", e.value);
+            else std::snprintf(buf, sizeof buf, "NOTHING TO PAVE: NEEDS %.0f CM OF GRADED GRAVEL", e.value2 * 100.0f);
+            return buf;
+        case K::Rolled:
+            if (e.value > 0.0f) std::snprintf(buf, sizeof buf, "ROLLED %.0f M2", e.value);
+            else return "NOTHING TO ROLL";
+            return buf;
+        case K::Recovered: return "RECOVERED TO THE QUARRY";
+        case K::Arrived: return "ARRIVED IN TOWN";
+    }
+    return "";
+}
+
+// Shows the world's events that concern this player.
+void show_events(Game& g) {
+    for (const Event& e : g.world->take_events()) {
+        if (e.player != g.me) continue;
+        if (e.kind == Event::Kind::Arrived) {
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "LAST TRIP %.1f S  %.2f L", e.value, e.value2);
+            g.last_trip = buf;
         }
-        case Action::NextMode:
-            v.box.mode = static_cast<ShiftMode>((static_cast<int>(v.box.mode) + 1) % 3);
-            v.lever = v.box.mode == ShiftMode::Automatic ? (v.rig.gear() > 0) - (v.rig.gear() < 0) : v.rig.gear();
-            g.say(std::string("GEARBOX: ") + mode_name(v.box.mode));
-            break;
-        case Action::ToggleAwd:
-            v.in.awd = !v.in.awd;
-            g.say(v.in.awd ? "AWD ENGAGED" : "AWD OFF");
-            break;
-        case Action::ToggleLock:
-            v.in.diff_lock = !v.in.diff_lock;
-            g.say(v.in.diff_lock ? "DIFFS LOCKED" : "DIFFS OPEN");
-            break;
-        case Action::ToggleLow:
-            v.in.low_range = !v.in.low_range;
-            g.say(v.in.low_range ? "LOW RANGE SELECTED (STOP OR CLUTCH TO ENGAGE)" : "HIGH RANGE SELECTED");
-            break;
-        case Action::ToggleEngineBrake:
-            v.in.engine_brake = !v.in.engine_brake;
-            g.say(v.in.engine_brake ? "ENGINE BRAKE ON" : "ENGINE BRAKE OFF");
-            break;
-        case Action::ToggleHandbrake:
-            v.in.handbrake = !v.in.handbrake;
-            g.say(v.in.handbrake ? "HANDBRAKE ON (DOUBLE-TAP S TO RELEASE)" : "HANDBRAKE OFF");
-            break;
-        case Action::NextVehicle:
-            g.trip_running = false;  // the trip clock times one vehicle
-            v.in.throttle = v.in.brake = v.in.clutch = 0.0f;
-            g.key_throttle = g.key_brake = g.key_clutch = 0.0f;
-            g.active = (g.active + 1) % static_cast<int>(g.vehicles.size());
-            g.say(g.car().label);
-            break;
-        case Action::Cargo:
-            if (v.has_blade) {
-                v.blade = !v.blade;
-                std::snprintf(buf, sizeof buf, "BLADE DOWN: SPREADING %.0f CM (Z/X THINNER/THICKER)", v.blade_layer * 100.0f);
-                g.say(v.blade ? buf : "BLADE UP");
-            } else if (x < kQuarryEnd) {
-                v.gravel = v.capacity;
-                std::snprintf(buf, sizeof buf, "LOADED %.0f M3 OF GRAVEL", v.capacity);
-                g.say(buf);
-            } else if (v.gravel > 0.0f) {
-                g.say("HOLD G TO TIP, LET GO TO STOP");  // update() does the tipping while G is held
-            } else {
-                g.say("EMPTY. LOAD AT THE QUARRY.");
-            }
-            break;
-        case Action::BladeLower:
-        case Action::BladeRaise:
-            if (!v.has_blade) break;
-            // Below zero the edge goes under the original ground level, to scrape gravel out of ruts and holes.
-            // The blade moves gravel only; digging the mud itself is not modelled yet.
-            v.blade_layer = std::clamp(std::round((v.blade_layer + (a == Action::BladeRaise ? 0.05f : -0.05f)) * 20.0f) / 20.0f, -0.5f, 0.5f);
-            if (v.blade_layer < -0.01f) std::snprintf(buf, sizeof buf, "BLADE %.0f CM BELOW GROUND: SCRAPING RUTS", -v.blade_layer * 100.0f);
-            else if (v.blade_layer < 0.01f) std::snprintf(buf, sizeof buf, "BLADE AT GROUND LEVEL: STRIPPING GRAVEL");
-            else std::snprintf(buf, sizeof buf, "BLADE LAYER %.0f CM", v.blade_layer * 100.0f);
-            g.say(buf);
-            break;
-        case Action::Pave: {
-            const int n = t.pave(under, kMinBase);
-            if (n > 0) std::snprintf(buf, sizeof buf, "LAID %.0f M2 OF ASPHALT. ROLL IT (O).", n * t.cell_size() * t.cell_size());
-            else std::snprintf(buf, sizeof buf, "NOTHING TO PAVE: NEEDS %.0f CM OF GRADED GRAVEL", kMinBase * 100.0f);
-            g.say(buf);
-            break;
-        }
-        case Action::Roll: {
-            const int n = t.roll(under);
-            std::snprintf(buf, sizeof buf, n > 0 ? "ROLLED %.0f M2" : "NOTHING TO ROLL", n * t.cell_size() * t.cell_size());
-            g.say(buf);
-            break;
-        }
-        case Action::Recover: {
-            const ShiftMode mode = v.box.mode;
-            v.rig = Rig(v.rig.spec(), t, SoilParams{}, v.home_x, g.course.lane_y);
-            v.lever = 0;
-            v.box = ShiftController{};
-            v.box.mode = mode;
-            g.say("RECOVERED TO THE QUARRY");
-            break;
-        }
+        g.say(event_text(e, *g.world));
     }
 }
 
+void send(Game& g, Command c) {
+    if (c == Command::NextVehicle) g.key_throttle = g.key_brake = g.key_clutch = 0.0f;  // the keys stay with the old one
+    g.world->command(g.me, c);
+    show_events(g);
+}
+
 void update(Game& g, const Held& h, float frame_dt) {
-    Vehicle& v = g.car();
     auto ramp = [&](float& pedal, bool on, float up, float down) {
         pedal = std::clamp(pedal + (on ? up : -down) * frame_dt, 0.0f, 1.0f);
     };
     ramp(g.key_throttle, h.throttle, 3.0f, 6.0f);
     ramp(g.key_brake, h.brake, 6.0f, 8.0f);
     ramp(g.key_clutch, h.clutch, 10.0f, 1.6f);  // stamps down fast, comes up slowly so a key can feather it
-    v.in.throttle = std::max(g.key_throttle, h.throttle_axis);
-    v.in.brake = std::max(g.key_brake, h.brake_axis);
-    v.in.clutch = std::max(g.key_clutch, h.clutch_axis);
-    v.in.gear = v.lever;
-    v.in.starter = h.starter;
+    PlayerControls c;
+    c.throttle = std::max(g.key_throttle, h.throttle_axis);
+    c.brake = std::max(g.key_brake, h.brake_axis);
+    c.clutch = std::max(g.key_clutch, h.clutch_axis);
+    c.starter = h.starter;
+    c.tip = h.cargo;
+    g.world->controls(g.me, c);
 
-    const float x0 = v.rig.x();
-    v.rig.set_payload(v.gravel * kGravelDensity);  // what is in the bed weighs on the rear bogie
-    // Fixed steps; the remainder of the frame carries over, so simulated time keeps pace with real time
-    // at any frame rate instead of drifting by the rounding (17 steps for a 16.7 ms frame ran 2% fast).
-    g.sim_debt += frame_dt;
-    const int steps = static_cast<int>(g.sim_debt / kDt);
-    g.sim_debt -= static_cast<float>(steps) * kDt;
-    for (int i = 0; i < steps; ++i) {
-        v.in.shift = i == 0 ? v.pending_shift : 0;
-        v.out = v.box.update(v.in, v.rig, kDt);
-        v.rig.step(v.out, kDt);
+    // The world advances in fixed ticks; the leftover time carries to the next frame, and the picture is drawn
+    // that far between the last two ticks.
+    g.tick_debt += frame_dt;
+    while (g.tick_debt >= kTickDt) {
+        for (std::size_t i = 0; i < g.looks.size(); ++i) g.looks[i].x_prev = g.world->machines()[i].rig.x();
+        g.world->tick();
+        g.tick_debt -= kTickDt;
     }
-    g.clock += steps * static_cast<double>(kDt);
-    if (steps > 0) v.pending_shift = 0;  // a frame shorter than a step keeps the request for the next one
-    for (std::size_t i = 0; i < v.wheel_angle.size(); ++i)
-        v.wheel_angle[i] = std::fmod(v.wheel_angle[i] + v.rig.wheel_speeds()[i] * frame_dt, 6.2831853f);
+    g.alpha = g.tick_debt / kTickDt;
+    show_events(g);
 
-    const float x = v.rig.x();
-    // Tipping: gravel leaves the bed while G is held and lands ahead of the truck. Small amounts each frame,
-    // slumping as they land, so a short press drops a small heap and tipping on the move spreads a windrow.
-    v.tipping = false;
-    if (!v.has_blade && h.cargo && v.gravel > 0.0f && x >= kQuarryEnd) {
-        Terrain& t = g.course.terrain;
-        const float out = std::min(v.gravel, kTipRate * frame_dt);
-        v.gravel = v.gravel - out < 1e-3f ? 0.0f : v.gravel - out;
-        t.dump_gravel(x + kTipAhead, g.course.lane_y, out);
-        v.tipping = true;
-        g.settle_x = x + kTipAhead;
-        g.settle_left = 2.0f;
+    for (std::size_t i = 0; i < g.looks.size(); ++i) {
+        const auto speeds = g.world->machines()[i].rig.wheel_speeds();
+        for (std::size_t k = 0; k < g.looks[i].wheel_angle.size(); ++k)
+            g.looks[i].wheel_angle[k] = std::fmod(g.looks[i].wheel_angle[k] + speeds[k] * frame_dt, 6.2831853f);
+    }
+    if (g.car().ripping) g.say("RIPPING UP THE ROAD");
+    if (g.car().tipping) {
         char buf[64];
-        if (v.gravel > 0.0f) std::snprintf(buf, sizeof buf, "TIPPING: %.1f M3 LEFT", v.gravel);
-        else std::snprintf(buf, sizeof buf, "EMPTY. LOAD AT THE QUARRY.");
+        std::snprintf(buf, sizeof buf, "TIPPING: %.1f M3 LEFT", g.car().gravel);
         g.say(buf);
-    }
-    if (g.settle_left > 0.0f) {
-        const float sx = g.settle_x, ly = g.course.lane_y;
-        g.course.terrain.settle({sx - 4.0f, ly - 4.0f, sx + 4.0f, ly + 4.0f}, 4);
-        g.settle_left -= frame_dt;
-    }
-
-    if (v.has_blade) {
-        Terrain& t = g.course.terrain;
-        v.blade_pile = 0.0f;
-        if (v.blade && v.rig.speed() >= 0.0f) {
-            // The edge holds the layer above the undisturbed ground under the tracks (firm ground plus mud, without
-            // ruts or gravel), like grade control on a real machine. Following the ruts instead drops the blade as
-            // the dozer sinks, so it bites deeper, slips, digs and sinks further; following the gravel makes it
-            // climb onto the layer it has just laid and build a ramp.
-            const auto& wheels = v.rig.spec().wheels;
-            float base = 0.0f;
-            for (const WheelSpec& w : wheels) {
-                const Cell& c = t.at(x + w.x, v.rig.y() + w.y);
-                base += c.hard + c.soft;
-            }
-            v.blade_edge = base / static_cast<float>(wheels.size()) + v.blade_layer;
-            const PushResult r =
-                t.push({x + kBladeAhead, v.rig.y(), 1.0f, 0.0f, kBladeWidth, v.blade_edge, std::max(0.0f, x - x0)});
-            v.blade_pile = r.pile;
-        }
-        v.blade_force = kPushFriction * kGravelDensity * 9.81f * v.blade_pile;
-        v.rig.set_external_resistance(v.blade_force);
-    }
-
-    // Trip clock: quarry gate to town gate.
-    if (x0 < kQuarryEnd && x >= kQuarryEnd) {
-        g.trip_running = true;
-        g.trip_time = 0.0f;
-        g.trip_fuel0 = v.rig.fuel_kg();
-    }
-    if (g.trip_running) {
-        g.trip_time += frame_dt;
-        if (x >= kTownStart) {
-            char buf[64];
-            std::snprintf(buf, sizeof buf, "LAST TRIP %.1f S  %.2f L", g.trip_time, (v.rig.fuel_kg() - g.trip_fuel0) / 0.84f);
-            g.last_trip = buf;
-            g.trip_running = false;
-            g.say("ARRIVED IN TOWN");
-        } else if (x < kQuarryEnd) {
-            g.trip_running = false;
-        }
     }
     g.message_time = std::max(0.0f, g.message_time - frame_dt);
 }
@@ -358,11 +216,11 @@ struct Pad {
 // Feeds bound axes and buttons into the game. Pedals add to the keyboard; buttons act like their keys;
 // an H-shifter moves the lever when it changes gate, including back to neutral.
 void poll_pad(Pad& pad, Game& g, Held& h) {
-    static constexpr std::pair<int, Action> kButtons[] = {
-        {input::ShiftUp, Action::ShiftUp}, {input::ShiftDown, Action::ShiftDown}, {input::Mode, Action::NextMode}, {input::Awd, Action::ToggleAwd},
-        {input::Lock, Action::ToggleLock}, {input::Low, Action::ToggleLow}, {input::EngineBrake, Action::ToggleEngineBrake},
-        {input::NextVehicle, Action::NextVehicle}, {input::Cargo, Action::Cargo}, {input::Pave, Action::Pave}, {input::Roll, Action::Roll},
-        {input::Recover, Action::Recover}};
+    static constexpr std::pair<int, Command> kButtons[] = {
+        {input::ShiftUp, Command::ShiftUp}, {input::ShiftDown, Command::ShiftDown}, {input::Mode, Command::NextMode}, {input::Awd, Command::ToggleAwd},
+        {input::Lock, Command::ToggleLock}, {input::Low, Command::ToggleLow}, {input::EngineBrake, Command::ToggleEngineBrake},
+        {input::NextVehicle, Command::NextVehicle}, {input::Cargo, Command::Cargo}, {input::Pave, Command::Pave}, {input::Roll, Command::Roll},
+        {input::Recover, Command::Recover}};
     const input::Map& m = pad.map;
     h.throttle_axis = m.axis(input::Throttle, pad.devices);
     h.brake_axis = m.axis(input::Brake, pad.devices);
@@ -374,17 +232,17 @@ void poll_pad(Pad& pad, Game& g, Held& h) {
     h.cargo |= m.button(input::Cargo, pad.devices);
     for (const auto& [fn, action] : kButtons) {
         const bool down = m.button(fn, pad.devices);
-        if (down && !pad.was[fn]) apply(g, action);
+        if (down && !pad.was[fn]) send(g, action);
         pad.was[fn] = down;
     }
     const int gate = m.gate(pad.devices);
     if (gate != pad.gate && gate != input::Map::kNoShifter)
-        apply(g, gate < 0 ? Action::Reverse : static_cast<Action>(static_cast<int>(Action::Gear0) + gate));
+        send(g, gate < 0 ? Command::Reverse : static_cast<Command>(static_cast<int>(Command::Gear0) + gate));
     pad.gate = gate;
 }
 
 SoundState sound_state(const Game& g, const Held& h) {
-    const Vehicle& v = g.vehicles[g.active];
+    const Machine& v = g.car();
     const Rig& rig = v.rig;
     SoundState s;
     s.rpm = rig.engine_rpm();
@@ -456,9 +314,9 @@ struct View {
 };
 
 void draw_ground(const Painter& p, const Game& g, View view) {
-    const Terrain& t = g.course.terrain;
+    const Terrain& t = g.world->terrain();
     const float cs = t.cell_size();
-    const float track_y = g.course.lane_y - 1.0f;  // the left wheel track
+    const float lane_y = g.world->course().lane_y, track_y = lane_y - 1.0f;  // the left wheel track
     p.rect(0, kViewTop, kW, kViewBottom - kViewTop, kSky);
 
     // Scenery: the quarry heap, the town, and a post every ten metres.
@@ -487,6 +345,12 @@ void draw_ground(const Painter& p, const Game& g, View view) {
         if (c.paving != Paving::None) p.rect(x0, y_base - 4.0f, w, 5.0f, c.paving == Paving::Rolled ? kRolled : kLaid);
         if (c.loose > 0.005f) p.rect(x0, y_top, w, y_base - 4.0f - y_top + 1.0f, kGravel);  // loose gravel on the road
     }
+    // The ground along the middle of the lane, between the wheels, as a line: the side view shows the left wheel
+    // track, so a heap or crown under the chassis would otherwise be invisible.
+    for (float wx = std::floor((view.cam_x - 11.5f) / cs) * cs; wx < view.cam_x + 21.5f; wx += cs) {
+        const Cell& c = t.at(wx + 0.5f * cs, lane_y);
+        p.rect(view.sx(wx), view.sy(c.surface()) - 1.0f, cs * kScale * 0.6f, 2.0f, {235, 235, 225});
+    }
 }
 
 void draw_wheel(const Painter& p, float cx, float cy, float radius, float angle) {
@@ -495,10 +359,12 @@ void draw_wheel(const Painter& p, float cx, float cy, float radius, float angle)
     p.line(cx, cy, cx + std::cos(angle) * radius * 0.92f, cy + std::sin(angle) * radius * 0.92f, kText);
 }
 
-void draw_vehicle(const Painter& p, const Game& g, const Vehicle& v, View view, bool active) {
-    const Terrain& t = g.course.terrain;
+void draw_vehicle(const Painter& p, const Game& g, int index, View view, bool active) {
+    const Machine& v = g.world->machine(index);
+    const Look& look = g.looks[static_cast<std::size_t>(index)];
+    const Terrain& t = g.world->terrain();
     const VehicleSpec& s = v.rig.spec();
-    const float r = s.wheel_radius, x = v.rig.x();
+    const float r = s.wheel_radius, x = g.shown_x(index);
     const float track_y = v.rig.y() - 1.0f;
     auto ground = [&](float wx) { return t.at(wx, track_y).surface(); };
     if (view.sx(x + 8.0f) < 0.0f || view.sx(x - 8.0f) > kW) return;
@@ -506,12 +372,12 @@ void draw_vehicle(const Painter& p, const Game& g, const Vehicle& v, View view, 
     if (v.has_blade) {
         const float half = 0.5f * s.tyre.length, z = ground(x);
         const float left = view.sx(x - half), right = view.sx(x + half), top = view.sy(z + 2.0f * r);
-        p.rect(view.sx(x - half - 0.2f), view.sy(z + 2.0f * r + 1.1f), (2.0f * half + 0.4f) * kScale, 1.1f * kScale, v.paint);
-        p.rect(view.sx(x - 1.0f), view.sy(z + 2.0f * r + 2.1f), 1.6f * kScale, 1.0f * kScale, shade(v.paint, 0.8f));
+        p.rect(view.sx(x - half - 0.2f), view.sy(z + 2.0f * r + 1.1f), (2.0f * half + 0.4f) * kScale, 1.1f * kScale, look.paint);
+        p.rect(view.sx(x - 1.0f), view.sy(z + 2.0f * r + 2.1f), 1.6f * kScale, 1.0f * kScale, shade(look.paint, 0.8f));
         p.rect(view.sx(x - 0.8f), view.sy(z + 2.0f * r + 1.95f), 1.2f * kScale, 0.6f * kScale, {200, 225, 240});
         p.rect(left, top, right - left, 2.0f * r * kScale, kTyre);
-        draw_wheel(p, left, view.sy(z + r), r * kScale, v.wheel_angle[0]);
-        draw_wheel(p, right, view.sy(z + r), r * kScale, v.wheel_angle[0]);
+        draw_wheel(p, left, view.sy(z + r), r * kScale, look.wheel_angle[0]);
+        draw_wheel(p, right, view.sy(z + r), r * kScale, look.wheel_angle[0]);
         const float lift = v.blade ? v.blade_edge - z : 0.5f;
         p.rect(view.sx(x + half + 0.55f), view.sy(z + lift + 1.1f), 0.18f * kScale, 1.1f * kScale, kSteel);
         p.line(view.sx(x + half), view.sy(z + 0.7f), view.sx(x + half + 0.55f), view.sy(z + lift + 0.5f), kSteel);
@@ -546,15 +412,15 @@ void draw_vehicle(const Painter& p, const Game& g, const Vehicle& v, View view, 
         p.poly(q, 4, c);
     };
     box(-2.2f, len + 1.4f, 0.15f, 0.45f, {60, 62, 66});
-    box(-2.2f, len - 1.0f, 0.45f, 1.5f, shade(v.paint, 0.7f));
+    box(-2.2f, len - 1.0f, 0.45f, 1.5f, shade(look.paint, 0.7f));
     if (v.gravel > 0.0f) box(-2.1f, len - 1.1f, 0.55f, 0.55f + 0.85f * v.gravel / v.capacity, kGravel);
-    box(len - 0.8f, len + 1.4f, 0.45f, 2.3f, v.paint);
+    box(len - 0.8f, len + 1.4f, 0.45f, 2.3f, look.paint);
     box(len + 0.3f, len + 1.25f, 1.45f, 2.1f, {200, 225, 240});
     for (std::size_t i = 0; i < s.wheels.size(); ++i) {
         const WheelSpec& w = s.wheels[i];
         if (w.y > 0.0f) continue;
         draw_wheel(p, view.sx(x + w.x), view.sy(ground(x + w.x) + r), r * kScale * (s.tyre.width > 0.4f ? 1.08f : 1.0f),
-                   v.wheel_angle[i]);
+                   look.wheel_angle[i]);
     }
     if (active) {
         const SDL_FPoint mark = at(len + 0.3f, 3.1f);
@@ -564,7 +430,7 @@ void draw_vehicle(const Painter& p, const Game& g, const Vehicle& v, View view, 
     // Where the load lands: a marker over the spot while there is gravel in the bed, and the stream while tipping.
     if (active && v.gravel > 0.0f) {
         const float lx = x + kTipAhead, lz = ground(lx);
-        const Rgb c = x < kQuarryEnd ? kDim : kAmber;  // no tipping in the quarry
+        const Rgb c = x < g.world->quarry_end() ? kDim : kAmber;  // no tipping in the quarry
         if (v.tipping) p.rect(view.sx(lx - 0.25f), view.sy(lz + 2.4f), 0.5f * kScale, 2.4f * kScale, kGravel);
         const SDL_FPoint arrow[3] = {{view.sx(lx - 0.35f), view.sy(lz + 3.2f)}, {view.sx(lx + 0.35f), view.sy(lz + 3.2f)},
                                      {view.sx(lx), view.sy(lz + 2.6f)}};
@@ -579,7 +445,7 @@ void lamp(const Painter& p, float x, float y, const char* label, bool on, Rgb li
 }
 
 void draw_hud(const Painter& p, const Game& g) {
-    const Vehicle& v = g.vehicles[g.active];
+    const Machine& v = g.car();
     const Rig& rig = v.rig;
     const Engine& e = rig.spec().engine;
     char buf[96];
@@ -595,8 +461,9 @@ void draw_hud(const Painter& p, const Game& g) {
     for (float m = 500.0f; m < span; m += 500.0f) p.rect(bx + bw * m / span, by + bh, 1, 6, kDim);
     std::snprintf(buf, sizeof buf, "%4.0f RPM", rpm);
     p.text(bx, 16, 3, kText, buf);
-    p.text(bx, 92, 2, kDim, v.label);
+    p.text(bx, 92, 2, kDim, v.label.c_str());
     if (!rig.engine_running()) p.text(bx, 114, 2, kRed, "ENGINE STALLED - HOLD I TO START");
+    else if (rig.telemetry().belly > 0.0f) p.text(bx, 114, 2, kRed, "HIGH-CENTRED: THE CHASSIS IS DRAGGING");
 
     // Speed and gear.
     std::snprintf(buf, sizeof buf, "%3.0f", std::abs(rig.speed()) * 3.6f);
@@ -661,8 +528,8 @@ void draw_hud(const Painter& p, const Game& g) {
     p.text(1076, 48, 1, kText, buf);
     std::snprintf(buf, sizeof buf, "X %.0f M", rig.x());
     p.text(1076, 64, 1, kText, buf);
-    if (g.trip_running) {
-        std::snprintf(buf, sizeof buf, "TRIP %.1f S", g.trip_time);
+    if (v.trip_running) {
+        std::snprintf(buf, sizeof buf, "TRIP %.1f S", v.trip_time);
         p.text(1076, 80, 1, kAmber, buf);
     }
     p.text(1076, 96, 1, kDim, g.last_trip.c_str());
@@ -698,36 +565,39 @@ struct Minimap {
             for (int ix = 0; ix < t.nx(); ++ix) pixels[static_cast<std::size_t>(iy) * t.nx() + ix] = map_colour(t.cell(ix, iy));
         t.take_deltas();
         SDL_UpdateTexture(texture, nullptr, pixels.data(), t.nx() * 4);
+        ++version;
     }
+    std::uint32_t version = 0;  // counts refreshes that found changes: the 3D view reloads the ground when it moves on
     void refresh(Terrain& t) {
         const std::vector<CellDelta> deltas = t.take_deltas();
         if (deltas.empty()) return;
         for (const CellDelta& d : deltas) pixels[d.index] = map_colour(d.cell);
         SDL_UpdateTexture(texture, nullptr, pixels.data(), t.nx() * 4);
+        ++version;
     }
 };
 
 void draw_map(const Painter& p, const Game& g, const Minimap& map, View view) {
-    const Terrain& t = g.course.terrain;
+    const Terrain& t = g.world->terrain();
     const float mx = 40, my = 598, mw = 1200, mh = 80;
     const float per_m = mw / (t.nx() * t.cell_size());
     p.rect(0, kViewBottom, kW, kH - kViewBottom, kPanel);
     const SDL_FRect dst{mx, my, mw, mh};
     SDL_RenderCopyF(p.r, map.texture, nullptr, &dst);
-    for (std::size_t i = 0; i < g.vehicles.size(); ++i) {
-        const Vehicle& v = g.vehicles[i];
-        const float vx = mx + v.rig.x() * per_m, vy = my + v.rig.y() * per_m;
-        p.rect(vx - 20, vy - 8, 36, 16, v.paint);
-        if (static_cast<int>(i) == g.active) p.frame(vx - 22, vy - 10, 40, 20, kText);
-        if (static_cast<int>(i) == g.active && v.gravel > 0.0f)  // where a tipped load will land
-            p.rect(mx + (v.rig.x() + kTipAhead) * per_m - 3.0f, my + g.course.lane_y * per_m - 3.0f, 6, 6, kAmber);
+    for (int i = 0; i < static_cast<int>(g.looks.size()); ++i) {
+        const Machine& v = g.world->machine(i);
+        const float x = g.shown_x(i), vx = mx + x * per_m, vy = my + v.rig.y() * per_m;
+        p.rect(vx - 20, vy - 8, 36, 16, g.looks[static_cast<std::size_t>(i)].paint);
+        if (i == g.active()) p.frame(vx - 22, vy - 10, 40, 20, kText);
+        if (i == g.active() && v.gravel > 0.0f)  // where a tipped load will land
+            p.rect(mx + (x + kTipAhead) * per_m - 3.0f, my + (g.world->course().lane_y - 0.5f * kTipWidth) * per_m, 6, kTipWidth * per_m, kAmber);
     }
     p.frame(mx + (view.cam_x - 11.0f) * per_m, my - 2, 32.0f * per_m, mh + 4, kText);
     p.centred(mx + 30.0f * per_m, my + mh + 4, 1, kDim, "QUARRY");
     p.centred(mx + 80.0f * per_m, my + mh + 4, 1, kDim, "MUD");
     p.centred(mx + 131.0f * per_m, my + mh + 4, 1, kDim, "TOWN");
     p.text(40, 694, 1, kDim,
-           "W/S THROTTLE BRAKE (SS HANDBRAKE)   SHIFT CLUTCH   1-6 N R GEARS   Q/E SHIFT DOWN/UP   M GEARBOX MODE   I STARTER   B ENGINE BRAKE   F3 CONTROLLER SETUP");
+           "DOTTED LINE: GROUND BETWEEN THE WHEELS   W/S THROTTLE BRAKE (SS HANDBRAKE)   SHIFT CLUTCH   1-6 N R GEARS   Q/E SHIFT DOWN/UP   M GEARBOX MODE   I STARTER   B ENGINE BRAKE   F3 CONTROLLER SETUP");
     p.text(40, 706, 1, kDim,
            "T AWD   Y DIFF LOCK   L LOW RANGE   TAB VEHICLE   G LOAD / HOLD TO TIP (DOZER: BLADE, Z/X LAYER)   P PAVE   O ROLL   BACKSPACE RECOVER   F5 RESET   F1 SOUND   F11 FULLSCREEN");
 }
@@ -751,12 +621,12 @@ void draw_wizard(const Painter& p, const Pad& pad) {
 
 void draw(SDL_Renderer* r, Game& g, Minimap& map, const Pad* pad = nullptr) {
     const Painter p{r};
-    const View view{g.car().rig.x()};
-    map.refresh(g.course.terrain);
+    const View view{g.shown_x(g.active())};
+    map.refresh(g.world->terrain());
     draw_ground(p, g, view);
-    for (std::size_t i = 0; i < g.vehicles.size(); ++i)
-        if (static_cast<int>(i) != g.active) draw_vehicle(p, g, g.vehicles[i], view, false);
-    draw_vehicle(p, g, g.car(), view, true);
+    for (int i = 0; i < static_cast<int>(g.looks.size()); ++i)
+        if (i != g.active()) draw_vehicle(p, g, i, view, false);
+    draw_vehicle(p, g, g.active(), view, true);
     draw_hud(p, g);
     draw_map(p, g, map, view);
     if (pad && pad->wizard.active()) draw_wizard(p, *pad);
@@ -764,30 +634,30 @@ void draw(SDL_Renderer* r, Game& g, Minimap& map, const Pad* pad = nullptr) {
 
 // ---------------------------------------------------------------- entry points
 
-bool key_action(SDL_Keycode key, Action& out) {
+bool key_action(SDL_Keycode key, Command& out) {
     switch (key) {
-        case SDLK_0: case SDLK_n: out = Action::Gear0; return true;
-        case SDLK_1: out = Action::Gear1; return true;
-        case SDLK_2: out = Action::Gear2; return true;
-        case SDLK_3: out = Action::Gear3; return true;
-        case SDLK_4: out = Action::Gear4; return true;
-        case SDLK_5: out = Action::Gear5; return true;
-        case SDLK_6: out = Action::Gear6; return true;
-        case SDLK_r: out = Action::Reverse; return true;
-        case SDLK_e: out = Action::ShiftUp; return true;
-        case SDLK_q: out = Action::ShiftDown; return true;
-        case SDLK_m: out = Action::NextMode; return true;
-        case SDLK_t: out = Action::ToggleAwd; return true;
-        case SDLK_y: out = Action::ToggleLock; return true;
-        case SDLK_l: out = Action::ToggleLow; return true;
-        case SDLK_b: out = Action::ToggleEngineBrake; return true;
-        case SDLK_TAB: out = Action::NextVehicle; return true;
-        case SDLK_g: out = Action::Cargo; return true;
-        case SDLK_p: out = Action::Pave; return true;
-        case SDLK_o: out = Action::Roll; return true;
-        case SDLK_BACKSPACE: out = Action::Recover; return true;
-        case SDLK_z: out = Action::BladeLower; return true;
-        case SDLK_x: out = Action::BladeRaise; return true;
+        case SDLK_0: case SDLK_n: out = Command::Gear0; return true;
+        case SDLK_1: out = Command::Gear1; return true;
+        case SDLK_2: out = Command::Gear2; return true;
+        case SDLK_3: out = Command::Gear3; return true;
+        case SDLK_4: out = Command::Gear4; return true;
+        case SDLK_5: out = Command::Gear5; return true;
+        case SDLK_6: out = Command::Gear6; return true;
+        case SDLK_r: out = Command::Reverse; return true;
+        case SDLK_e: out = Command::ShiftUp; return true;
+        case SDLK_q: out = Command::ShiftDown; return true;
+        case SDLK_m: out = Command::NextMode; return true;
+        case SDLK_t: out = Command::ToggleAwd; return true;
+        case SDLK_y: out = Command::ToggleLock; return true;
+        case SDLK_l: out = Command::ToggleLow; return true;
+        case SDLK_b: out = Command::ToggleEngineBrake; return true;
+        case SDLK_TAB: out = Command::NextVehicle; return true;
+        case SDLK_g: out = Command::Cargo; return true;
+        case SDLK_p: out = Command::Pave; return true;
+        case SDLK_o: out = Command::Roll; return true;
+        case SDLK_BACKSPACE: out = Command::Recover; return true;
+        case SDLK_z: out = Command::BladeLower; return true;
+        case SDLK_x: out = Command::BladeRaise; return true;
         default: return false;
     }
 }
@@ -838,19 +708,45 @@ struct Json {
 };
 
 // Everything the active vehicle is doing, for the dashboard at GET / (telemetry_page.h).
-std::string telemetry_json(const Game& g) {
-    const Vehicle& v = g.vehicles[g.active];
+std::string telemetry_json(const Game& g, std::uint32_t terrain_version) {
+    const Machine& v = g.car();
     const Rig& rig = v.rig;
     const VehicleSpec& s = rig.spec();
     const BodyTelemetry& b = rig.telemetry();
-    const Terrain& t = g.course.terrain;
+    const Terrain& t = g.world->terrain();
     float max_torque = 0.0f;
     for (const auto& [rpm, nm] : s.engine.curve) max_torque = std::max(max_torque, nm);
 
     Json j;
     j.open('{');
-    j.fixed("t", g.clock);
-    j.key("vehicle"), j.str(v.label);
+    j.fixed("t", g.world->time());
+    j.field("terrain_version", terrain_version);
+    j.key("vehicles"), j.open('[');  // every vehicle, for the 3D view
+    for (int i = 0; i < static_cast<int>(g.looks.size()); ++i) {
+        const Machine& m = g.world->machine(i);
+        const VehicleSpec& ms = m.rig.spec();
+        const Rgb c = g.looks[static_cast<std::size_t>(i)].paint;
+        char paint[8];
+        std::snprintf(paint, sizeof paint, "#%02x%02x%02x", c.r, c.g, c.b);
+        j.open('{');
+        j.key("label"), j.str(m.label.c_str());
+        j.key("paint"), j.str(paint);
+        j.flag("active", i == g.active());
+        j.field("x", g.shown_x(i)), j.field("y", m.rig.y()), j.field("radius", ms.wheel_radius);
+        j.key("tyre"), j.open('{'), j.field("width", ms.tyre.width), j.field("length", ms.tyre.length), j.close('}');
+        j.key("wheels"), j.open('[');
+        for (const WheelSpec& w : ms.wheels) j.open('{'), j.field("x", w.x), j.field("y", w.y), j.close('}');
+        j.close(']');
+        j.key("blade");
+        if (m.has_blade) {
+            j.open('{'), j.flag("down", m.blade), j.field("edge", m.blade_edge), j.field("x", g.shown_x(i) + kBladeAhead), j.close('}');
+        } else {
+            j.sep(), j.s += "null";
+        }
+        j.close('}');
+    }
+    j.close(']');
+    j.key("vehicle"), j.str(v.label.c_str());
     j.key("mode"), j.str(mode_name(v.box.mode));
     j.field("gear", rig.gear());
     j.field("reverse_gears", static_cast<double>(s.gearbox.reverse.size()));
@@ -933,6 +829,34 @@ std::string telemetry_json(const Game& g) {
     return j.s;
 }
 
+// The whole ground for the 3D view (view3d_page.h), little-endian: "INCT", u32 version, u16 nx, u16 ny, f32 cell
+// size, then per cell in millimetres: i16 surface, u16 gravel, u16 loose gravel on asphalt, u16 rut, u16 mud depth,
+// and u8 paving (0 none, 1 laid, 2 rolled). About 11 bytes a cell: 380 kB for the playground.
+std::string terrain_blob(const Terrain& t, std::uint32_t version) {
+    const std::size_t n = static_cast<std::size_t>(t.nx()) * t.ny();
+    std::string out(16 + 11 * n, '\0');
+    char* p = out.data();
+    auto put = [&](std::size_t at, const void* v, std::size_t len) { std::memcpy(p + at, v, len); };
+    put(0, "INCT", 4);
+    const auto nx = static_cast<std::uint16_t>(t.nx()), ny = static_cast<std::uint16_t>(t.ny());
+    const float cs = t.cell_size();
+    put(4, &version, 4), put(8, &nx, 2), put(10, &ny, 2), put(12, &cs, 4);
+    auto mm = [](float m) { return static_cast<long>(std::lround(m * 1000.0f)); };
+    for (std::size_t i = 0; i < n; ++i) {
+        const Cell& c = t.cell(static_cast<int>(i % t.nx()), static_cast<int>(i / t.nx()));
+        const auto top = static_cast<std::int16_t>(std::clamp(mm(c.surface()), -32768L, 32767L));
+        const std::uint16_t layers[4] = {static_cast<std::uint16_t>(std::clamp(mm(c.gravel), 0L, 65535L)),
+                                         static_cast<std::uint16_t>(std::clamp(mm(c.loose), 0L, 65535L)),
+                                         static_cast<std::uint16_t>(std::clamp(mm(c.rut), 0L, 65535L)),
+                                         static_cast<std::uint16_t>(std::clamp(mm(c.soft), 0L, 65535L))};
+        put(16 + 2 * i, &top, 2);
+        for (std::size_t k = 0; k < 4; ++k) put(16 + 2 * n * (k + 1) + 2 * i, &layers[k], 2);
+        const auto paving = static_cast<std::uint8_t>(c.paving);
+        put(16 + 10 * n + i, &paving, 1);
+    }
+    return out;
+}
+
 struct AudioOut {
     SDL_AudioDeviceID device = 0;
     Synth synth{48000.0f};
@@ -987,7 +911,7 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
 
     auto game = std::make_unique<Game>();
     Minimap map;
-    map.rebuild(renderer, game->course.terrain);
+    map.rebuild(renderer, game->world->terrain());
 
     telemetry::Server telemetry;
     if (telemetry_port < 0) {
@@ -1003,7 +927,8 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
     } else {
         std::fprintf(stderr, "telemetry: could not listen on port %d, running without it\n", telemetry_port);
     }
-    Uint64 last_publish = 0;
+    Uint64 last_publish = 0, last_ground = 0;
+    std::uint32_t ground_sent = ~0u;
     Uint64 last = SDL_GetTicks64();
     Uint32 brake_tap = 0;  // time of the last brake key press, for the double tap
     for (bool running = true; running;) {
@@ -1021,13 +946,13 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
             const SDL_Scancode code = ev.key.keysym.scancode;
             if ((code == SDL_SCANCODE_S || code == SDL_SCANCODE_DOWN) && !ev.key.repeat && !pad.wizard.active()) {
                 if (brake_tap != 0 && ev.key.timestamp - brake_tap <= kDoubleTapMs) {
-                    apply(*game, Action::ToggleHandbrake);
+                    send(*game, Command::ToggleHandbrake);
                     brake_tap = 0;
                 } else {
                     brake_tap = ev.key.timestamp;
                 }
             }
-            Action a;
+            Command a;
             if (key == SDLK_F3) {
                 if (pad.wizard.active()) pad.wizard.cancel();
                 else if (pad.devices.sticks().empty()) game->say("NO CONTROLLER CONNECTED");
@@ -1045,9 +970,9 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
                 game->say(audio.muted ? "SOUND OFF" : "SOUND ON");
             } else if (key == SDLK_F5) {
                 game = std::make_unique<Game>();
-                map.rebuild(renderer, game->course.terrain);
-            } else if (key_action(key, a) && (!ev.key.repeat || a == Action::Pave || a == Action::Roll)) {
-                apply(*game, a);
+                map.rebuild(renderer, game->world->terrain());
+            } else if (key_action(key, a) && (!ev.key.repeat || a == Command::Pave || a == Command::Roll)) {
+                send(*game, a);
             }
         }
         const Uint8* keys = SDL_GetKeyboardState(nullptr);
@@ -1070,8 +995,13 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
         }
         update(*game, held, frame_dt);
         if (telemetry.running() && now - last_publish >= 33) {  // 30 Hz is plenty; the stream sends 20
-            telemetry.publish(telemetry_json(*game));
+            telemetry.publish(telemetry_json(*game, map.version));
             last_publish = now;
+        }
+        if (telemetry.running() && map.version != ground_sent && now - last_ground >= 250) {  // the 3D view's ground
+            telemetry.publish_resource("/terrain.bin", "application/octet-stream", terrain_blob(game->world->terrain(), map.version));
+            ground_sent = map.version;
+            last_ground = now;
         }
         if (audio.device) {
             SDL_LockAudioDevice(audio.device);
@@ -1142,7 +1072,7 @@ int telemetry_test(const Game& g) {
     };
     telemetry::Server server;
     check(server.start(0, false), "server starts on a free port");
-    const std::string json = telemetry_json(g);
+    const std::string json = telemetry_json(g, 0);
     server.publish(json);
     check(json.front() == '{' && json.back() == '}', "snapshot is a JSON object");
     check(json.find("\"wheels\":[{") != std::string::npos && json.find("\"ground\":{") != std::string::npos, "snapshot has wheels and ground");
@@ -1154,6 +1084,14 @@ int telemetry_test(const Game& g) {
     const std::string stream = http_get(server.port(), "/stream", 2048);
     check(stream.find("text/event-stream") != std::string::npos && stream.find("data: {") != std::string::npos, "GET /stream sends snapshots");
     check(http_get(server.port(), "/nothing").rfind("HTTP/1.1 404", 0) == 0, "unknown paths are 404");
+    const std::string page3d = http_get(server.port(), "/3d");
+    check(page3d.find("text/html") != std::string::npos && page3d.find("webgl2") != std::string::npos, "GET /3d serves the 3D view");
+    const Terrain& t = g.world->terrain();
+    server.publish_resource("/terrain.bin", "application/octet-stream", terrain_blob(t, 7));
+    const std::string bin = http_get(server.port(), "/terrain.bin");
+    const std::size_t body = bin.find("\r\n\r\n") + 4;
+    check(bin.size() - body == 16 + 11 * static_cast<std::size_t>(t.nx()) * t.ny() && bin.compare(body, 4, "INCT") == 0,
+          "GET /terrain.bin returns the whole ground");
     server.stop();
     std::printf("telemetry test: %s\n", failures ? "FAILED" : "passed");
     return failures;
@@ -1220,7 +1158,7 @@ int controller_test(SDL_Renderer* renderer, SDL_Surface* surface, Game& g, Minim
     check(pad.map.save(file.c_str()) && loaded.load(file.c_str()) && loaded.b == pad.map.b, "bindings survive save and load");
 
     // Drive with it: manual box, clutch down, lever into the first gate, feed the clutch out with some throttle.
-    while (g.car().box.mode != ShiftMode::Manual) apply(g, Action::NextMode);
+    while (g.car().box.mode != ShiftMode::Manual) send(g, Command::NextMode);
     auto frames = [&](float seconds) {
         for (int i = 0, n = static_cast<int>(seconds * 60.0f); i < n; ++i) {
             Held h;
@@ -1252,11 +1190,11 @@ int selftest(const std::string& prefix) {
     auto game = std::make_unique<Game>();
     Game& g = *game;
     Minimap map;
-    map.rebuild(renderer, g.course.terrain);
+    map.rebuild(renderer, g.world->terrain());
     {
         auto scratch = std::make_unique<Game>();  // the controller test drives its own world
         if (controller_test(renderer, surface, *scratch, map, prefix) != 0) return 1;
-        map.rebuild(renderer, g.course.terrain);
+        map.rebuild(renderer, g.world->terrain());
     }
 
     constexpr int kWavRate = 16000;
@@ -1288,13 +1226,13 @@ int selftest(const std::string& prefix) {
     Held clutch;
     clutch.clutch = true;
     auto set_mode = [&](ShiftMode m) {
-        while (g.car().box.mode != m) apply(g, Action::NextMode);
+        while (g.car().box.mode != m) send(g, Command::NextMode);
     };
 
     run({}, 3.0f);  // idle
     // 1. Manual box: pushing the lever at first with the clutch up grinds.
     set_mode(ShiftMode::Manual);
-    apply(g, Action::Gear1);
+    send(g, Command::Gear1);
     run({}, 0.1f);
     shot("manual, first gear without the clutch");
     // 2. Clutch down, first, feed it in with throttle, then into the mud.
@@ -1302,29 +1240,29 @@ int selftest(const std::string& prefix) {
     run(gas, 30.0f);
     shot("stock truck, manual first gear, driven into the mud");
     // 3. Offroad truck on the automatic with AWD and locks.
-    apply(g, Action::NextVehicle);
-    apply(g, Action::ToggleAwd);
-    apply(g, Action::ToggleLock);
-    apply(g, Action::Gear1);
+    send(g, Command::NextVehicle);
+    send(g, Command::ToggleAwd);
+    send(g, Command::ToggleLock);
+    send(g, Command::Gear1);
     run(gas, 14.0f);
     shot("offroad truck, automatic, AWD + locks, in the mud");
     run(gas, 14.0f);
     shot("offroad truck, later");
     // 4. Gravel: five loads tipped along the mud, then the dozer grades towards them.
-    for (int i = 0; i < 5; ++i) g.course.terrain.dump_gravel(64.0f + 8.0f * i, g.course.lane_y, kLoad);
-    apply(g, Action::NextVehicle);
-    apply(g, Action::Cargo);
-    apply(g, Action::Gear1);
+    for (int i = 0; i < 5; ++i) g.world->terrain().dump_gravel(64.0f + 8.0f * i, g.world->course().lane_y, kLoad);
+    send(g, Command::NextVehicle);
+    send(g, Command::Cargo);
+    send(g, Command::Gear1);
     run(gas, 16.0f);
     shot("dozer grading, piles ahead");
     run(gas, 30.0f);
     // 5. Pave and roll the first half, then send the stock truck across.
-    g.course.terrain.pave({58.0f, 3.5f, 80.0f, 8.5f}, kMinBase);
-    g.course.terrain.roll({58.0f, 3.5f, 80.0f, 8.5f});
-    apply(g, Action::NextVehicle);
-    apply(g, Action::Recover);
+    g.world->terrain().pave({58.0f, 3.5f, 80.0f, 8.5f}, kMinBase);
+    g.world->terrain().roll({58.0f, 3.5f, 80.0f, 8.5f});
+    send(g, Command::NextVehicle);
+    send(g, Command::Recover);
     set_mode(ShiftMode::Automatic);
-    apply(g, Action::Gear1);
+    send(g, Command::Gear1);
     run(gas, 9.0f);
     shot("stock truck, automatic, on the new road");
     run(gas, 12.0f);

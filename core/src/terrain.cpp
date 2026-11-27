@@ -218,6 +218,7 @@ PushResult Terrain::push(const Blade& b) {
         }
 
     double cut = 0.0;
+    int ripped = 0;
     if (!heap.empty()) {
         for (int iy = s.y0; iy <= s.y1; ++iy)
             for (int ix = s.x0; ix <= s.x1; ++ix) {
@@ -225,6 +226,14 @@ PushResult Terrain::push(const Blade& b) {
                 local(ix, iy, along, across);
                 if (along > 0.0f || along <= -band || std::abs(across) > half) continue;
                 Cell& c = cells_[index(ix, iy)];
+                if (b.rip && c.paving != Paving::None && b.edge < c.fixed_top()) {
+                    // Ripping: the road breaks up and its base, with any loose gravel on it, is loose again.
+                    c.gravel += c.loose;
+                    c.loose = 0.0f;
+                    c.paving = Paving::None;
+                    ++ripped;
+                    mark(index(ix, iy));
+                }
                 const float take = std::min(c.movable(), c.surface() - floor_of(c));
                 if (take <= 0.0f) continue;
                 c.movable() -= take;
@@ -279,7 +288,7 @@ PushResult Terrain::push(const Blade& b) {
         visit(ix + 1, iy, false), visit(ix - 1, iy, false), visit(ix, iy + 1, false), visit(ix, iy - 1, false);
     }
     const double area = static_cast<double>(cs_) * cs_;
-    return {static_cast<float>(cut * area), static_cast<float>(pile * area)};
+    return {static_cast<float>(cut * area), static_cast<float>(pile * area), ripped};
 }
 
 int Terrain::pave(Rect r, float min_base) {

@@ -70,6 +70,7 @@ th:first-child, td:first-child { text-align: left; }
   <div class="gear num" id="gear">–</div>
   <div><span class="big num" id="speed">0</span><span class="unit">km/h</span></div>
   <div><span class="big num" id="rpm">0</span><span class="unit">rpm</span></div>
+  <a href="/3d" style="color:var(--blue)">3D view of the ground</a>
   <div class="status"><span class="dot" id="dot"></span><span id="status">connecting</span></div>
 </header>
 <main>

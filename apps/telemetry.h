@@ -4,10 +4,13 @@
 //   GET /          the dashboard page (telemetry_page.h)
 //   GET /stream    Server-Sent Events: the latest JSON snapshot, 20 times a second
 //   GET /snapshot  the latest JSON snapshot once
+//   GET /3d        the 3D view of the ground (view3d_page.h)
+//   any path given to publish_resource(), e.g. /terrain.bin
 // The game calls publish() every frame. No dependencies beyond POSIX sockets; on Windows it is a stub.
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -24,6 +27,7 @@
 #endif
 
 #include "telemetry_page.h"
+#include "view3d_page.h"
 
 namespace telemetry {
 
@@ -45,6 +49,11 @@ public:
         json_ = std::move(json);
         ++version_;
     }
+    // Any other data the game wants to serve, replaced whole each time (e.g. the ground for the 3D view).
+    void publish_resource(const std::string& path, std::string content_type, std::string body) {
+        std::lock_guard<std::mutex> lock(mu_);
+        resources_[path] = {std::move(content_type), std::move(body)};
+    }
 
 private:
     std::string latest(std::uint64_t* version) {
@@ -55,7 +64,19 @@ private:
     void accept_loop();
     void serve(int fd);
 
+    struct Resource {
+        std::string type, body;
+    };
+    bool resource(const std::string& path, Resource& out) {
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto it = resources_.find(path);
+        if (it == resources_.end()) return false;
+        out = it->second;
+        return true;
+    }
+
     std::mutex mu_;
+    std::map<std::string, Resource> resources_;
     std::string json_ = "{}";
     std::uint64_t version_ = 0;
     std::atomic<bool> running_{false};
@@ -179,8 +200,13 @@ inline void Server::serve(int fd) {
     std::string path = request.substr(sp1 + 1, sp2 - sp1 - 1);
     path = path.substr(0, path.find('?'));
 
+    Resource res;
     if (path == "/" || path == "/index.html") {
         detail::respond(fd, "200 OK", "text/html; charset=utf-8", kPage);
+    } else if (path == "/3d") {
+        detail::respond(fd, "200 OK", "text/html; charset=utf-8", kView3dPage);
+    } else if (resource(path, res)) {
+        detail::respond(fd, "200 OK", res.type.c_str(), res.body);
     } else if (path == "/snapshot") {
         detail::respond(fd, "200 OK", "application/json", latest(nullptr));
     } else if (path == "/stream") {

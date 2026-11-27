@@ -43,11 +43,13 @@ struct Blade {
     float width = 3.4f;            // [m]
     float edge = 0.0f;             // elevation of the cutting edge [m]
     float swept = 0.0f;            // how far the edge moved since the last call [m]
+    bool rip = false;              // break up asphalt the edge passes below, back into a loose gravel base
 };
 
 struct PushResult {
     float cut;   // gravel cut and pushed this call [m3]
     float pile;  // gravel held above the edge in front of the blade [m3]; what the blade is pushing
+    int ripped = 0;  // asphalt cells broken up this call
 };
 
 // Regular grid of cells. Every edit records the touched cells, so a host can

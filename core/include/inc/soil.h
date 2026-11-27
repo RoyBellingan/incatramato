@@ -20,13 +20,24 @@ struct SoilParams {
     float viscous = 0.15f;   // growth of soft-ground resistance with speed [s/m]
 };
 
-// A tyre or a track: all the ground model needs is the contact patch and a few grip factors.
+// Friction coefficient (traction / load at full slip) of a tyre or track on each hard surface. Tracks and tyres
+// rank surfaces differently: steel grousers bite into earth far better than rubber, and far worse into concrete.
+// Approximate values in the spirit of the Caterpillar Performance Handbook's "coefficient of traction" table,
+// quoted from memory, not checked against the handbook yet.
+struct Grip {
+    float firm;     // firm dry earth
+    float wet;      // firm ground at the bottom of a rut in mud: wet, rutted and smeared with slop
+    float gravel;   // loose gravel
+    float asphalt;  // rolled asphalt (laid but not rolled grips 80% of this)
+};
+
+// A tyre or a track: all the ground model needs is the contact patch and its grip.
 struct Tyre {
     std::string name;
     float width;      // contact patch across the direction of travel [m]
     float length;     // contact patch along it [m]
-    float soft_grip;  // multiplier on traction in mud (tread, lugs, grousers)
-    float hard_grip;  // multiplier on friction on firm ground, gravel and asphalt
+    float soft_grip;  // multiplier on the soil's shear strength in mud (tread, lugs, grousers)
+    Grip grip;        // on hard surfaces
     float crr_scale;  // multiplier on rolling resistance on hard surfaces
 };
 

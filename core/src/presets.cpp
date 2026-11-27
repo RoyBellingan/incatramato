@@ -19,8 +19,10 @@ Shaft diff(Lock lock, std::vector<Shaft> children, bool awd_only = false) {
 
 }  // namespace
 
-Tyre highway_tyre() { return {"highway", 0.30f, 0.30f, 0.8f, 1.0f, 1.0f}; }
-Tyre mud_tyre() { return {"mud", 0.45f, 0.50f, 1.3f, 0.85f, 1.6f}; }
+// Grip: firm earth, wet firm ground, loose gravel, rolled asphalt.
+Tyre highway_tyre() { return {"highway", 0.30f, 0.30f, 0.8f, {0.55f, 0.30f, 0.36f, 0.90f}, 1.0f}; }
+// Open lugs: better on anything loose, a smaller rubber patch on asphalt.
+Tyre mud_tyre() { return {"mud", 0.45f, 0.50f, 1.3f, {0.60f, 0.38f, 0.42f, 0.75f}, 1.6f}; }
 
 VehicleSpec truck_6x6(Tyre tyre) {
     VehicleSpec v;
@@ -60,7 +62,9 @@ VehicleSpec dozer() {
     v.clutch = {2500.0f};
     v.gearbox = {{3.0f, 1.8f, 1.1f}, {2.6f, 1.55f, 0.95f}, 22.0f, 1.0f};  // reverse about 15% faster, for the run back
     v.driveline = diff(Lock::Locked, {wheel(0), wheel(1)});
-    v.tyre = {"track", 0.60f, 3.00f, 1.4f, 0.9f, 2.0f};
+    // Steel grousers: about 0.9 on earth and 0.6 at the bottom of a muddy rut, but only 0.45 on asphalt or concrete. In mud they shear
+    // the soil along the whole track, which tyres cannot: about 1.5 times a mud tyre's grip there.
+    v.tyre = {"track", 0.60f, 3.00f, 1.8f, {0.90f, 0.60f, 0.50f, 0.45f}, 2.0f};
     return v;
 }
 
