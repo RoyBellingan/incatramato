@@ -683,6 +683,45 @@ void dozer_does_not_climb_its_own_heap() {
     CHECK(worst < 0.2f + 0.08f);
 }
 
+// The blade layer is grade control: the edge holds the set layer above the undisturbed ground under the tracks,
+// not above the gravel the dozer stands on. Standing on 20 cm of gravel with the layer at 5 cm, it cuts 15 cm
+// below its own tracks and leaves 5 cm behind; on mud, the ruts it presses in do not lower the edge.
+void blade_layer_is_measured_from_the_ground() {
+    for (const float start : {34.0f, 66.0f}) {  // firm ground, then the mud (60 to 100 m)
+        auto w = make_playground();
+        const PlayerId me = w->join();
+        w->command(me, Command::NextVehicle);
+        w->command(me, Command::NextVehicle);
+        Machine& dozer = w->machine(w->vehicle_of(me));
+        const float y = w->course().lane_y;
+        Terrain& t = w->terrain();
+        for (int iy = 0; iy < t.ny(); ++iy)
+            for (int ix = 0; ix < t.nx(); ++ix) {
+                const float cx = (ix + 0.5f) * t.cell_size(), cy = (iy + 0.5f) * t.cell_size();
+                if (cx < start - 10.0f || cx > start + 30.0f || std::abs(cy - y) > 4.0f) continue;
+                Cell c = t.cell(ix, iy);
+                c.gravel = 0.20f;
+                t.fill({cx - 0.01f, cy - 0.01f, cx + 0.01f, cy + 0.01f}, c);
+            }
+        dozer.rig = Rig(dozer.rig.spec(), t, SoilParams{}, start, y);
+        w->command(me, Command::Cargo);  // blade down
+        for (int i = 0; i < 3; ++i) w->command(me, Command::BladeLower);
+        CHECK(near(dozer.blade_layer, 0.05f, 1e-4));
+        w->command(me, Command::Gear1);
+        PlayerControls go;
+        go.throttle = 1.0f;
+        w->controls(me, go);
+        for (int i = 0; i < 50 * 8; ++i) w->tick();
+        const Cell& ground = t.at(start + 2.0f, y);
+        CHECK(near(dozer.blade_edge, ground.hard + ground.soft + 0.05f, 1e-3));
+        CHECK(dozer.rig.x() > start + 6.0f);
+        // The lane the blade has passed, short of the tracks: a track slipping in the mud throws gravel just behind
+        // itself (Terrain::dig), which is not the blade's doing.
+        for (float x = start + 3.0f; x < dozer.rig.x() - 3.0f; x += 0.5f)
+            for (const float side : {-1.0f, 0.0f, 1.0f}) CHECK(near(t.at(x, y + side).gravel, 0.05f, 0.02f));
+    }
+}
+
 // Choosing reverse lifts the dozer's blade, once, and it stays up going forward again.
 void dozer_lifts_its_blade_to_reverse() {
     auto w = make_playground();
@@ -1041,6 +1080,7 @@ int main() {
     a_heap_between_the_wheels_is_ploughed();
     tipping_pours_across_the_tailgate();
     dozer_does_not_climb_its_own_heap();
+    blade_layer_is_measured_from_the_ground();
     dozer_lifts_its_blade_to_reverse();
     no_vertical_gravel_after_a_push();
     vehicles_sit_on_the_ground();
