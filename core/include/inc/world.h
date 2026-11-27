@@ -90,7 +90,8 @@ struct Machine {
     float gravel = 0.0f;  // in the bed [m3]
     bool tipping = false;
     bool tip_refused = false;  // tipping is being refused (another vehicle too close); told once
-    float settle_x = 0.0f, settle_left = 0.0f;  // a fresh heap keeps slumping for a moment
+    float settle_x = 0.0f, settle_left = 0.0f;  // a fresh heap (tipped, or let go by the blade) keeps slumping a moment
+    float trail_left = 0.0f;  // the lane behind a pushing blade keeps slumping a moment after it passes
 
     bool blade = false;
     float blade_layer = 0.20f;  // edge above the original ground under the tracks [m]; negative digs into ruts
@@ -138,6 +139,7 @@ private:
         PlayerControls held;
     };
     void tick_machine(Machine& m);
+    void let_go(Machine& m);
     void say(int player, int vehicle, Event::Kind kind, float value = 0.0f, float value2 = 0.0f, bool on = false);
 
     presets::Course course_;

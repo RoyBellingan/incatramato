@@ -133,6 +133,7 @@ void World::command(PlayerId player, Command c) {
         case Command::Cargo:
             if (v.has_blade) {
                 v.blade = !v.blade;
+                if (!v.blade) let_go(v);
                 say(player, vi, K::Blade, v.blade_layer, 0, v.blade);
             } else if (v.capacity <= 0.0f) {
                 break;
@@ -175,6 +176,12 @@ void World::command(PlayerId player, Command c) {
             break;
         }
     }
+}
+
+// The blade stops holding its heap: the face it was pressed against slumps to the angle of repose.
+void World::let_go(Machine& m) {
+    m.settle_x = m.rig.x() + kBladeAhead;
+    m.settle_left = kSettleTime;
 }
 
 void World::tick() {
@@ -238,6 +245,17 @@ void World::tick_machine(Machine& m) {
     } else {
         m.tip_refused = false;
     }
+    // Behind a pushing dozer: where the blade cut a channel through gravel wider than itself, the channel walls
+    // slump in once the machine has passed. Only behind its tracks, never under it (see dozer_does_not_climb...).
+    if (m.trail_left > 0.0f) {
+        const VehicleSpec& s = m.rig.spec();
+        float rear = 1e30f;
+        for (const WheelSpec& w : s.wheels) rear = std::min(rear, w.x - 0.5f * s.tyre.length);
+        rear += x;
+        const float ly = course_.lane_y, half = 0.5f * kBladeWidth + 3.0f;
+        t.settle({rear - 8.0f, ly - half, rear - t.cell_size(), ly + half}, 4);
+        m.trail_left -= kTickDt;
+    }
     if (m.settle_left > 0.0f) {
         const float ly = course_.lane_y;
         t.settle({m.settle_x - 4.0f, ly - 4.0f, m.settle_x + 4.0f, ly + 4.0f}, 4);
@@ -248,6 +266,7 @@ void World::tick_machine(Machine& m) {
     // or the dozer rolls backwards. It stays up until the driver lowers it again.
     if (m.has_blade && m.blade && (m.box.selected() < 0 || m.rig.gear() < 0 || m.rig.speed() < -0.3f)) {
         m.blade = false;
+        let_go(m);
         say(m.driver, vi, Event::Kind::Blade, m.blade_layer, 1.0f, false);
     }
 
@@ -273,6 +292,7 @@ void World::tick_machine(Machine& m) {
                                          m.blade_layer < -0.01f});
             m.blade_pile = r.pile;
             m.ripping = r.ripped > 0;
+            m.trail_left = kSettleTime;
         }
         m.blade_force = push_force(m.blade_pile);
         external += m.blade_force;

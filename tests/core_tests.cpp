@@ -688,6 +688,39 @@ void dozer_lifts_its_blade_to_reverse() {
     CHECK(!dozer.blade);
 }
 
+// After a push, nothing stays steeper than the angle of repose: stop mid-push with a big heap against the blade,
+// lift it, and the face it held slumps; so do the walls of the channel it cut into the heap.
+void no_vertical_gravel_after_a_push() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    w->command(me, Command::NextVehicle);
+    w->command(me, Command::NextVehicle);
+    Machine& dozer = w->machine(w->vehicle_of(me));
+    const float y = w->course().lane_y;
+    w->terrain().dump_gravel(45.0f, y, kLoad);  // a full load, 5 m across: wider than the 3.4 m blade
+    w->command(me, Command::Cargo);
+    w->command(me, Command::Gear1);
+    PlayerControls go;
+    go.throttle = 1.0f;
+    w->controls(me, go);
+    for (int i = 0; i < 50 * 20 && dozer.blade_pile < 3.0f; ++i) w->tick();
+    CHECK(dozer.blade_pile >= 3.0f);
+    PlayerControls stop;
+    stop.brake = 1.0f;
+    w->controls(me, stop);
+    for (int i = 0; i < 50; ++i) w->tick();
+    w->command(me, Command::Cargo);  // blade up, the heap still in front of it
+    for (int i = 0; i < 50 * 3; ++i) w->tick();
+    const Terrain& t = w->terrain();
+    float steepest = 0.0f;
+    for (int iy = 0; iy + 1 < t.ny(); ++iy)
+        for (int ix = static_cast<int>(36.0f / t.cell_size()); ix < static_cast<int>(56.0f / t.cell_size()); ++ix) {
+            const float z = t.cell(ix, iy).surface();
+            steepest = std::max({steepest, std::abs(z - t.cell(ix + 1, iy).surface()), std::abs(z - t.cell(ix, iy + 1).surface())});
+        }
+    CHECK(steepest < 0.7f * t.cell_size() + 0.03f);
+}
+
 // A load tipped standing still pours over the whole tailgate: a heap wider and lower than a cone from one point.
 void tipping_pours_across_the_tailgate() {
     auto w = make_playground();
@@ -890,6 +923,7 @@ int main() {
     tipping_pours_across_the_tailgate();
     dozer_does_not_climb_its_own_heap();
     dozer_lifts_its_blade_to_reverse();
+    no_vertical_gravel_after_a_push();
     vehicles_sit_on_the_ground();
     exhaust_brake_holds_a_descent();
     std::printf(failures ? "%d check(s) failed\n" : "all checks passed\n", failures);
