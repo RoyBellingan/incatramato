@@ -253,6 +253,80 @@ void Rig::step(const Controls& u, float dt) {
     x_ += v_ * dt;
 }
 
+Pose Rig::pose(float x) const {
+    const Tyre& tyre = spec_.tyre;
+    const float r = spec_.wheel_radius, cs = terrain_->cell_size();
+    const std::size_t n = spec_.wheels.size();
+    Pose p;
+    p.wheel_z.assign(n, 0.0f);
+    std::vector<float> slope(n, 0.0f);
+    const bool tracked = tyre.length > 2.0f * r;
+    for (std::size_t i = 0; i < n; ++i) {
+        const WheelSpec& w = spec_.wheels[i];
+        const float cx = x + w.x, cy = y_ + w.y;
+        if (!tracked) {
+            // A wheel's centre sits as high as the highest point under its rim needs: it rolls up a step gradually.
+            float centre = -1e30f;
+            const float step = 0.5f * cs;
+            const int reach = static_cast<int>(r / step);
+            for (int k = -reach; k <= reach; ++k) {  // symmetric, and through the centre
+                const float d = static_cast<float>(k) * step;
+                centre = std::max(centre, terrain_->at(cx + d, cy).surface() + std::sqrt(std::max(0.0f, r * r - d * d)));
+            }
+            p.wheel_z[i] = centre - r;
+            continue;
+        }
+        // A track is a rigid beam: it lies on the upper convex hull of the ground under it, on the hull segment
+        // that spans its centre (where its weight acts). Over a crest it tips from one segment to the next.
+        std::vector<std::pair<float, float>> hull;
+        const float half = 0.5f * tyre.length;
+        for (float d = -half; d <= half + 1e-4f; d += 0.5f * cs) {
+            const std::pair<float, float> q{d, terrain_->at(cx + d, cy).surface()};
+            while (hull.size() >= 2) {  // monotone chain, upper side: drop points below the line to the new one
+                const auto& a = hull[hull.size() - 2];
+                const auto& b = hull.back();
+                if ((b.first - a.first) * (q.second - a.second) - (b.second - a.second) * (q.first - a.first) >= 0.0f) hull.pop_back();
+                else break;
+            }
+            hull.push_back(q);
+        }
+        std::size_t k = 0;
+        while (k + 2 < hull.size() && hull[k + 1].first < 0.0f) ++k;
+        const auto& a = hull[k];
+        const auto& b = hull[std::min(k + 1, hull.size() - 1)];
+        slope[i] = b.first > a.first ? (b.second - a.second) / (b.first - a.first) : 0.0f;
+        p.wheel_z[i] = a.second + slope[i] * (0.0f - a.first);
+    }
+
+    // The body: tracks give their own slope; wheels a least-squares line through their contacts. Roll from the
+    // mean height of each side.
+    float k = 0.0f, z0 = 0.0f;
+    if (tracked) {
+        for (std::size_t i = 0; i < n; ++i) k += slope[i], z0 += p.wheel_z[i] - slope[i] * spec_.wheels[i].x;
+        k /= static_cast<float>(n), z0 /= static_cast<float>(n);
+    } else {
+        float sx = 0.0f, sz = 0.0f, sxx = 0.0f, sxz = 0.0f;
+        for (std::size_t i = 0; i < n; ++i) {
+            const float wx = spec_.wheels[i].x;
+            sx += wx, sz += p.wheel_z[i], sxx += wx * wx, sxz += wx * p.wheel_z[i];
+        }
+        const float m = static_cast<float>(n), den = m * sxx - sx * sx;
+        k = std::abs(den) > 1e-6f ? (m * sxz - sx * sz) / den : 0.0f;
+        z0 = (sz - k * sx) / m;
+    }
+    p.z = z0;
+    p.pitch = std::atan(k);
+    float left = 0.0f, right = 0.0f, yl = 0.0f, yr = 0.0f;
+    int nl = 0, nr = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const float wy = spec_.wheels[i].y;
+        if (wy < 0.0f) left += p.wheel_z[i], yl += wy, ++nl;
+        else right += p.wheel_z[i], yr += wy, ++nr;
+    }
+    if (nl > 0 && nr > 0) p.roll = std::atan2(right / nr - left / nl, yr / nr - yl / nl);
+    return p;
+}
+
 float Rig::engine_rpm() const { return engine_omega_ * kRadToRpm; }
 
 float Rig::input_rpm(int gear) const { return shaft_ * spec_.gearbox.ratio(gear, low_) * kRadToRpm; }

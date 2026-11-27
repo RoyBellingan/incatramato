@@ -273,8 +273,9 @@ void World::tick_machine(Machine& m) {
 
     // The chassis ploughs loose gravel: what stands higher than the ground clearance between the wheel tracks is
     // pushed ahead of the leading axle, like a small blade, instead of lifting the vehicle (Rig only lets fixed
-    // ground high-centre it).
-    if (std::abs(x - x0) > 1e-4f) {
+    // ground high-centre it). Not with a blade down: the blade does the pushing, and the chassis's own pass would
+    // let the blade's heap slump back under the tracks.
+    if (std::abs(x - x0) > 1e-4f && !(m.has_blade && m.blade)) {
         const VehicleSpec& s = m.rig.spec();
         const float dir = x > x0 ? 1.0f : -1.0f;
         float lead = dir > 0.0f ? -1e30f : 1e30f, ymin = 1e30f, ymax = -1e30f, ground = 0.0f;

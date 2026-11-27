@@ -71,7 +71,11 @@ const M = {
     return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
       -(x[0] * e[0] + x[1] * e[1] + x[2] * e[2]), -(y[0] * e[0] + y[1] * e[1] + y[2] * e[2]), -(z[0] * e[0] + z[1] * e[1] + z[2] * e[2]), 1]);
   },
-  box(cx, cy, cz, sx, sy, sz) { return new Float32Array([sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, sz, 0, cx, cy, cz, 1]); },
+  // A box centred at c with sizes s, pitched nose-up about the lateral axis and rolled right-side-up.
+  box(cx, cy, cz, sx, sy, sz, pitch = 0, roll = 0) {
+    const ca = Math.cos(-pitch), sa = Math.sin(-pitch), cb = Math.cos(roll), sb = Math.sin(roll);
+    return new Float32Array([ca * sx, 0, -sa * sx, 0, sa * sb * sy, cb * sy, ca * sb * sy, 0, sa * cb * sz, -sb * sz, ca * cb * sz, 0, cx, cy, cz, 1]);
+  },
 };
 
 function program(vs, fs) {
@@ -309,20 +313,25 @@ function frame() {
   gl.uniform3fv(gl.getUniformLocation(boxProg, "uL"), L);
   gl.bindVertexArray(cube.vao);
   const uM = gl.getUniformLocation(boxProg, "uM"), uC = gl.getUniformLocation(boxProg, "uC");
-  const box = (cx, cy, cz, sx, sy, sz, c) => { gl.uniformMatrix4fv(uM, false, M.box(cx, cy, cz, sx, sy, sz)); gl.uniform3fv(uC, c); gl.drawArrays(gl.TRIANGLES, 0, cube.count); };
+  const box = (cx, cy, cz, sx, sy, sz, c, pitch = 0, roll = 0) => {
+    gl.uniformMatrix4fv(uM, false, M.box(cx, cy, cz, sx, sy, sz, pitch, roll)); gl.uniform3fv(uC, c); gl.drawArrays(gl.TRIANGLES, 0, cube.count);
+  };
   if (state && state.vehicles && ground) {
     for (const v of state.vehicles) {
-      const r = v.radius, tw = v.tyre.width, tl = v.tyre.length, track = tl > 2 * r;
-      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, zs = 0;
+      // The pose comes from the game (Rig::pose): wheels on the bumps under their rims, tracks as rigid beams.
+      // Heights are exaggerated like the ground; so is the tilt, so the vehicle still sits on it.
+      const r = v.radius, tw = v.tyre.width, tl = v.tyre.length, track = tl > 2 * r, ex = exaggeration;
+      const pitch = Math.atan(ex * Math.tan(v.pitch || 0)), roll = Math.atan(ex * Math.tan(v.roll || 0));
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
       for (const wh of v.wheels) {
-        const wx = v.x + wh.x, wy = v.y + wh.y, z = groundZ(wx, wy);
-        box(wx, wy, z + r, track ? tl : 2 * r, tw, 2 * r, [0.12, 0.12, 0.13]);
-        x0 = Math.min(x0, wx - tl / 2); x1 = Math.max(x1, wx + tl / 2); y0 = Math.min(y0, wy - tw / 2); y1 = Math.max(y1, wy + tw / 2); zs += z;
+        const wx = v.x + wh.x, wy = v.y + wh.y, z = (wh.z ?? groundZ(wx, wy) / ex) * ex;
+        box(wx, wy, z + r, track ? tl : 2 * r, tw, 2 * r, [0.12, 0.12, 0.13], track ? pitch : 0);
+        x0 = Math.min(x0, wx - tl / 2); x1 = Math.max(x1, wx + tl / 2); y0 = Math.min(y0, wy - tw / 2); y1 = Math.max(y1, wy + tw / 2);
       }
-      const zb = zs / v.wheels.length + 2 * r;
-      box((x0 + x1) / 2, (y0 + y1) / 2, zb + 0.5, x1 - x0 + 0.4, y1 - y0, 1.0, hex(v.paint));
-      if (v.active) box(x1 - 0.6, (y0 + y1) / 2, zb + 1.5, 1.2, y1 - y0 - 0.2, 1.0, hex(v.paint).map((c) => c * 0.8));
-      if (v.blade) box(v.blade.x, v.y, v.blade.edge * exaggeration + 0.55, 0.15, 3.4, 1.1, v.blade.down ? [0.9, 0.66, 0.22] : [0.55, 0.56, 0.58]);
+      const cx = (x0 + x1) / 2, zc = (v.z ?? 0) * ex + Math.tan(pitch) * (cx - v.x) + 2 * r;
+      box(cx, (y0 + y1) / 2, zc + 0.5, x1 - x0 + 0.4, y1 - y0, 1.0, hex(v.paint), pitch, roll);
+      if (v.active) box(x1 - 0.6, (y0 + y1) / 2, zc + 1.5 + Math.tan(pitch) * (x1 - 0.6 - cx), 1.2, y1 - y0 - 0.2, 1.0, hex(v.paint).map((c) => c * 0.8), pitch, roll);
+      if (v.blade) box(v.blade.x, v.y, v.blade.edge * ex + 0.55, 0.15, 3.4, 1.1, v.blade.down ? [0.9, 0.66, 0.22] : [0.55, 0.56, 0.58]);
     }
   }
   if (ground) {  // the cross: where the readout reads

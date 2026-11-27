@@ -77,6 +77,14 @@ struct BodyTelemetry {
     float fuel_rate = 0.0f;  // [kg/s]
 };
 
+// How a vehicle sits on the ground. The rig itself moves along x only; this is what its body would look like.
+struct Pose {
+    float z = 0.0f;      // height of the contact line under the vehicle's origin [m]
+    float pitch = 0.0f;  // nose up positive [rad]
+    float roll = 0.0f;   // right side (larger y) up positive [rad]
+    std::vector<float> wheel_z;  // where each wheel or track meets the ground, at its centre [m]
+};
+
 // Straight-line test rig: the full powertrain and ground model, with the body reduced to one degree of
 // freedom along x and fixed wheel loads. It exists to test and tune the core without a physics engine.
 // In the game the rigid body, suspension, steering and lateral forces belong to the engine's physics.
@@ -93,6 +101,10 @@ public:
     float mass() const { return spec_.mass + payload_; }
 
     std::span<const WheelTelemetry> wheel_telemetry() const { return wheel_tm_; }
+    // Resting pose at position x (pass the drawn position when drawing between steps): each wheel on the highest
+    // bump under its rim, each track as a rigid beam on the highest points under it, the body on a line through
+    // them. For drawing and telemetry; the physics does not use it.
+    Pose pose(float x) const;
     const BodyTelemetry& telemetry() const { return body_tm_; }
 
     const VehicleSpec& spec() const { return spec_; }

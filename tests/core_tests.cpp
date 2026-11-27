@@ -641,6 +641,32 @@ void no_tipping_near_a_vehicle() {
     CHECK(refusals == 1);
 }
 
+// A whole dozer pushing a heap: behind the blade, under its own tracks, the gravel stays at the set layer.
+// (Catches anything else letting the heap slump back under the machine.)
+void dozer_does_not_climb_its_own_heap() {
+    auto w = make_playground();
+    const PlayerId me = w->join();
+    w->command(me, Command::NextVehicle);
+    w->command(me, Command::NextVehicle);
+    Machine& dozer = w->machine(w->vehicle_of(me));
+    CHECK(dozer.has_blade);
+    const float y = w->course().lane_y;
+    w->terrain().dump_gravel(44.0f, y, kLoad);  // firm ground, 10 m ahead of the dozer at 34 m
+    w->command(me, Command::Cargo);  // blade down, 20 cm layer
+    w->command(me, Command::Gear1);
+    PlayerControls go;
+    go.throttle = 1.0f;
+    w->controls(me, go);
+    float worst = 0.0f;
+    for (int i = 0; i < 50 * 12; ++i) {
+        w->tick();
+        const float x = dozer.rig.x();
+        for (float d = -1.5f; d <= 1.0f; d += 0.25f)  // under the tracks, behind the blade
+            for (float side : {-1.0f, 1.0f}) worst = std::max(worst, w->terrain().at(x + d, y + side).surface());
+    }
+    CHECK(worst < 0.2f + 0.08f);
+}
+
 // A load tipped standing still pours over the whole tailgate: a heap wider and lower than a cone from one point.
 void tipping_pours_across_the_tailgate() {
     auto w = make_playground();
@@ -679,6 +705,28 @@ void a_heap_between_the_wheels_is_ploughed() {
     CHECK(w->terrain().gravel_volume() > 0.9 * before && w->terrain().gravel_volume() < before + 0.01);
     // The 1 m peak is cut to the chassis line: 40 cm clearance above the wheels, which ride on the heap's flanks.
     CHECK(w->terrain().at(30.0f, w->course().lane_y).surface() < 0.6f);
+}
+
+// The resting pose: level on flat ground; a wheel rolls up a step gradually; a track tilts onto a heap and
+// lies level once its centre is on it.
+void vehicles_sit_on_the_ground() {
+    Terrain t(200, 48, 0.25f);
+    Cell step;
+    step.gravel = 0.4f;
+    t.fill({20.0f, 0.0f, 50.0f, 12.0f}, step);
+    Rig truck(stock_truck(), t, SoilParams{}, 10.0f, 6.0f);
+    const Pose flat = truck.pose(10.0f);
+    CHECK(near(flat.pitch, 0.0, 1e-6) && near(flat.z, 0.0, 1e-6) && near(flat.roll, 0.0, 1e-6));
+    // Front wheels (2.2 m ahead, radius 0.55) 45 cm short of the step: the rim touches it, partly up, not on top.
+    const float front = truck.pose(20.0f - 2.2f - 0.45f).wheel_z[0];
+    CHECK(front > 0.05f && front < 0.35f);
+    CHECK(truck.pose(20.0f - 2.2f - 0.45f).pitch > 0.0f);
+
+    Rig dozer(presets::dozer(), t, SoilParams{}, 10.0f, 6.0f);
+    const Pose climbing = dozer.pose(19.0f);  // tracks from 17.5 to 20.5: the front on the step
+    CHECK(climbing.pitch > 0.1f);
+    const Pose on = dozer.pose(21.0f);  // centre on the step, the rear overhanging
+    CHECK(near(on.pitch, 0.0, 1e-4) && near(on.z, 0.4, 1e-3));
 }
 
 void exhaust_brake_holds_a_descent() {
@@ -819,6 +867,8 @@ int main() {
     no_tipping_near_a_vehicle();
     a_heap_between_the_wheels_is_ploughed();
     tipping_pours_across_the_tailgate();
+    dozer_does_not_climb_its_own_heap();
+    vehicles_sit_on_the_ground();
     exhaust_brake_holds_a_descent();
     std::printf(failures ? "%d check(s) failed\n" : "all checks passed\n", failures);
     return failures ? 1 : 0;

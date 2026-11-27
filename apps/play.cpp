@@ -369,19 +369,29 @@ void draw_vehicle(const Painter& p, const Game& g, int index, View view, bool ac
     auto ground = [&](float wx) { return t.at(wx, track_y).surface(); };
     if (view.sx(x + 8.0f) < 0.0f || view.sx(x - 8.0f) > kW) return;
 
+    const Pose pose = v.rig.pose(x);
     if (v.has_blade) {
-        const float half = 0.5f * s.tyre.length, z = ground(x);
-        const float left = view.sx(x - half), right = view.sx(x + half), top = view.sy(z + 2.0f * r);
-        p.rect(view.sx(x - half - 0.2f), view.sy(z + 2.0f * r + 1.1f), (2.0f * half + 0.4f) * kScale, 1.1f * kScale, look.paint);
-        p.rect(view.sx(x - 1.0f), view.sy(z + 2.0f * r + 2.1f), 1.6f * kScale, 1.0f * kScale, shade(look.paint, 0.8f));
-        p.rect(view.sx(x - 0.8f), view.sy(z + 2.0f * r + 1.95f), 1.2f * kScale, 0.6f * kScale, {200, 225, 240});
-        p.rect(left, top, right - left, 2.0f * r * kScale, kTyre);
-        draw_wheel(p, left, view.sy(z + r), r * kScale, look.wheel_angle[0]);
-        draw_wheel(p, right, view.sy(z + r), r * kScale, look.wheel_angle[0]);
-        const float lift = v.blade ? v.blade_edge - z : 0.5f;
-        p.rect(view.sx(x + half + 0.55f), view.sy(z + lift + 1.1f), 0.18f * kScale, 1.1f * kScale, kSteel);
-        p.line(view.sx(x + half), view.sy(z + 0.7f), view.sx(x + half + 0.55f), view.sy(z + lift + 0.5f), kSteel);
-        if (active) p.centred(view.sx(x), view.sy(z + 2.0f * r + 2.9f), 2, kText, "V");
+        // Everything on the dozer is laid out along its tilted track line: a metres along it, b above it.
+        const float half = 0.5f * s.tyre.length, c = std::cos(pose.pitch), sn = std::sin(pose.pitch);
+        auto at = [&](float a, float b) { return SDL_FPoint{view.sx(x + a * c - b * sn), view.sy(pose.z + a * sn + b * c)}; };
+        auto box = [&](float a0, float a1, float b0, float b1, Rgb col) {
+            const SDL_FPoint q[4] = {at(a0, b0), at(a1, b0), at(a1, b1), at(a0, b1)};
+            p.poly(q, 4, col);
+        };
+        box(-half, half, 0.0f, 2.0f * r, kTyre);
+        box(-half - 0.2f, half + 0.2f, 2.0f * r, 2.0f * r + 1.1f, look.paint);
+        box(-1.0f, 0.6f, 2.0f * r + 1.1f, 2.0f * r + 2.1f, shade(look.paint, 0.8f));
+        box(-0.8f, 0.4f, 2.0f * r + 1.25f, 2.0f * r + 1.85f, {200, 225, 240});
+        const SDL_FPoint rear = at(-half, r), front = at(half, r);
+        draw_wheel(p, rear.x, rear.y, r * kScale, look.wheel_angle[0]);
+        draw_wheel(p, front.x, front.y, r * kScale, look.wheel_angle[0]);
+        // The blade hangs at its cutting edge when down (where the ground model cuts), lifted clear when up.
+        const float bx = x + kBladeAhead, bz = v.blade ? v.blade_edge : pose.z + std::tan(pose.pitch) * kBladeAhead + 0.5f;
+        p.rect(view.sx(bx - 0.09f), view.sy(bz + 1.1f), 0.18f * kScale, 1.1f * kScale, kSteel);
+        const SDL_FPoint arm = at(half, 0.7f);
+        p.line(arm.x, arm.y, view.sx(bx), view.sy(bz + 0.5f), kSteel);
+        const SDL_FPoint mark = at(0.0f, 2.0f * r + 2.9f);
+        if (active) p.centred(mark.x, mark.y, 2, kText, "V");
         return;
     }
 
@@ -392,11 +402,12 @@ void draw_vehicle(const Painter& p, const Game& g, int index, View view, bool ac
     int rear_count = 0;
     for (const WheelSpec& w : s.wheels) {
         if (w.y > 0.0f) continue;
+        const float wz = pose.wheel_z[static_cast<std::size_t>(&w - s.wheels.data())] + r;  // rolls up steps, not jumps
         if (w.x == front_x) {
-            fz = ground(x + w.x) + r;
+            fz = wz;
         } else {
             rx += w.x;
-            rz += ground(x + w.x) + r;
+            rz += wz;
             ++rear_count;
         }
     }
@@ -419,7 +430,7 @@ void draw_vehicle(const Painter& p, const Game& g, int index, View view, bool ac
     for (std::size_t i = 0; i < s.wheels.size(); ++i) {
         const WheelSpec& w = s.wheels[i];
         if (w.y > 0.0f) continue;
-        draw_wheel(p, view.sx(x + w.x), view.sy(ground(x + w.x) + r), r * kScale * (s.tyre.width > 0.4f ? 1.08f : 1.0f),
+        draw_wheel(p, view.sx(x + w.x), view.sy(pose.wheel_z[i] + r), r * kScale * (s.tyre.width > 0.4f ? 1.08f : 1.0f),
                    look.wheel_angle[i]);
     }
     if (active) {
@@ -732,10 +743,13 @@ std::string telemetry_json(const Game& g, std::uint32_t terrain_version) {
         j.key("label"), j.str(m.label.c_str());
         j.key("paint"), j.str(paint);
         j.flag("active", i == g.active());
+        const Pose pose = m.rig.pose(g.shown_x(i));
         j.field("x", g.shown_x(i)), j.field("y", m.rig.y()), j.field("radius", ms.wheel_radius);
+        j.field("z", pose.z), j.field("pitch", pose.pitch), j.field("roll", pose.roll);
         j.key("tyre"), j.open('{'), j.field("width", ms.tyre.width), j.field("length", ms.tyre.length), j.close('}');
         j.key("wheels"), j.open('[');
-        for (const WheelSpec& w : ms.wheels) j.open('{'), j.field("x", w.x), j.field("y", w.y), j.close('}');
+        for (std::size_t k = 0; k < ms.wheels.size(); ++k)
+            j.open('{'), j.field("x", ms.wheels[k].x), j.field("y", ms.wheels[k].y), j.field("z", pose.wheel_z[k]), j.close('}');
         j.close(']');
         j.key("blade");
         if (m.has_blade) {
@@ -1010,6 +1024,10 @@ int play(int telemetry_port, bool telemetry_lan, bool fullscreen) {
         }
         draw(renderer, *game, map, &pad);
         SDL_RenderPresent(renderer);
+        // Present normally waits for the display; where vsync is not honoured the loop would spin flat out and
+        // take a whole core, so never run faster than about 144 frames a second.
+        const Uint64 spent = SDL_GetTicks64() - now;
+        if (spent < 7) SDL_Delay(static_cast<Uint32>(7 - spent));
     }
     if (audio.device) SDL_CloseAudioDevice(audio.device);
     SDL_Quit();
