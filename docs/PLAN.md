@@ -129,6 +129,29 @@ once M1 is done.
   become chunked, with soft-ground data only where there is soft ground, before maps grow.
 - **Determinism** across compilers is not guaranteed, which is why the host owns the ground.
 
+## Next up (as of 2026-11-27)
+
+Open from the playground sessions, roughly in order:
+
+1. **Save and load** (step 3 of [MULTIPLAYER.md](MULTIPLAYER.md), moved ahead of step 2): save a situation, change
+   the code or the tuning, reload and check. Two keys in the playground.
+2. **The blade cutting mud.** Stripping soft ground down to firm before laying gravel is what real builders do.
+   Needs a design first: the ground layers have a fixed order (firm, mud, gravel), so pushed mud has nowhere to go
+   on top of gravel.
+3. **Decisions still open:** authority (host owns ground and tools, players own their vehicle's motion, is the
+   recommendation; needed before multiplayer step 2) and whether vehicles belong to one player or are shared
+   (needed before step 4).
+4. **Gradual blade height**: a 1:20 taper when the layer changes, so a road starts on a ramp instead of a 20 cm
+   step that paving then freezes.
+5. **Check the grip table** (`data/tuning.json`, tyres) against the Caterpillar Performance Handbook's traction
+   table; the values are from memory.
+6. **Tuning questions:** gravel spreads a wheel's load at 2:1 (cautious; a loaded truck still bottoms out through
+   20 cm of gravel); the rig's own constants (belly friction, slip regularisation, brake band) are not in the
+   tuning file yet.
+7. **Small things:** a "sinking now" value in the telemetry next to the total sinkage; the stock truck and the
+   dozer are nearly the same yellow; the 3D view could draw the 2D slice line and start at true scale; the
+   minimap drains the terrain change list, which multiplayer step 4 will need instead.
+
 ## Reasons to stop or re-scope
 
 - Driving on the road you built is not more satisfying than the mud was (answerable at M2).
